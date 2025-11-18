@@ -32,6 +32,17 @@ type Room = {
 
 const rooms = new Map<string, Room>();
 const socketToMember = new Map<string, { roomId: string; memberId: string }>();
+const roomsByCode = new Map<string, Room>();
+
+function registerRoom(room: Room) {
+  rooms.set(room.id, room);
+  roomsByCode.set(room.code, room);
+}
+
+function unregisterRoom(room: Room) {
+  rooms.delete(room.id);
+  roomsByCode.delete(room.code);
+}
 
 /* --------- Utils --------- */
 
@@ -78,7 +89,7 @@ app.post("/rooms", (req, res) => {
     members: new Map([[ownerId, owner]]),
   };
 
-  rooms.set(roomId, room);
+  registerRoom(room);
 
   res.json({
     roomId,
@@ -96,7 +107,7 @@ app.post("/rooms/join", (req, res) => {
     .toUpperCase();
   const name = String(req.body?.name ?? "").trim() || "Player";
 
-  const room = Array.from(rooms.values()).find((r) => r.code === code);
+  const room = roomsByCode.get(code);
   if (!room) {
     return res.status(404).json({ error: "Room not found" });
   }
@@ -118,6 +129,81 @@ app.post("/rooms/join", (req, res) => {
     memberId,
     owner: room.ownerId === memberId,
     room: serializeRoom(room),
+  });
+});
+
+// ➜ Ajouter des bots dans une room (pour tests)
+//    POST /rooms/:code/bots
+//    Body JSON (tout optionnel) :
+//    {
+//      "count": 3,
+//      "namePrefix": "Bot",
+//      "championId": 266,
+//      "skinId": 266000,
+//      "chromaId": 0
+//    }
+app.post("/rooms/:code/bots", (req, res) => {
+  const rawCode = String(req.params.code ?? "")
+    .trim()
+    .toUpperCase();
+  const room = roomsByCode.get(rawCode);
+
+  if (!room) {
+    return res.status(404).json({ error: "Room not found" });
+  }
+
+  const body = req.body ?? {};
+  const rawCount = Number(body.count ?? 1);
+
+  // Sécurité : 1 ≤ count ≤ 5
+  const count = Number.isFinite(rawCount)
+    ? Math.min(Math.max(Math.floor(rawCount), 1), 5)
+    : 1;
+
+  const namePrefix =
+    typeof body.namePrefix === "string" && body.namePrefix.trim()
+      ? body.namePrefix.trim()
+      : "Bot";
+
+  const forcedChampionId =
+    typeof body.championId === "number" ? body.championId : undefined;
+  const forcedSkinId =
+    typeof body.skinId === "number" ? body.skinId : undefined;
+  const forcedChromaId =
+    typeof body.chromaId === "number" ? body.chromaId : undefined;
+
+  const createdBots: Member[] = [];
+
+  console.log(
+    `[dev-bots] adding ${count} bot(s) to room ${room.id} (code=${room.code})`
+  );
+
+  const currentSize = room.members.size;
+
+  for (let i = 0; i < count; i++) {
+    const memberId = randomUUID();
+
+    const bot: Member = {
+      id: memberId,
+      name: `${namePrefix} ${currentSize + 1 + i}`,
+      championId:
+        forcedChampionId !== undefined ? forcedChampionId : randomInt(1, 201),
+      skinId:
+        forcedSkinId !== undefined ? forcedSkinId : randomInt(1000, 999999),
+      chromaId: forcedChromaId !== undefined ? forcedChromaId : 0,
+    };
+
+    room.members.set(memberId, bot);
+    createdBots.push(bot);
+  }
+
+  io.to(room.id).emit("room-state", serializeRoom(room));
+
+  return res.json({
+    ok: true,
+    added: createdBots.length,
+    room: serializeRoom(room),
+    bots: createdBots,
   });
 });
 
@@ -188,7 +274,7 @@ io.on("connection", (socket) => {
     );
 
     if (room.members.size === 0) {
-      rooms.delete(roomId);
+      unregisterRoom(room);
       console.log(`[room] deleted empty room ${roomId}`);
     } else {
       io.to(roomId).emit("room-state", serializeRoom(room));
