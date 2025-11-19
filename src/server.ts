@@ -13,6 +13,8 @@ const io = new Server(httpServer, {
   cors: { origin: "*" },
 });
 
+const MAX_MEMBERS = 5;
+
 /* --------- Types --------- */
 
 type Member = {
@@ -114,6 +116,11 @@ app.post("/rooms/join", (req, res) => {
     return res.status(404).json({ error: "Room not found" });
   }
 
+  // ➜ Limite de 5 membres
+  if (room.members.size >= MAX_MEMBERS) {
+    return res.status(403).json({ error: "Room is full" });
+  }
+
   const memberId = randomUUID();
   const member: Member = {
     id: memberId,
@@ -158,10 +165,19 @@ app.post("/rooms/:code/bots", (req, res) => {
   const body = req.body ?? {};
   const rawCount = Number(body.count ?? 1);
 
-  // Sécurité : 1 ≤ count ≤ 5
-  const count = Number.isFinite(rawCount)
+  const requestedCount = Number.isFinite(rawCount)
     ? Math.min(Math.max(Math.floor(rawCount), 1), 5)
     : 1;
+
+  // ➜ slots restants dans la room
+  const freeSlots = MAX_MEMBERS - room.members.size;
+  if (freeSlots <= 0) {
+    return res.status(400).json({
+      error: "Room is already full",
+    });
+  }
+
+  const count = Math.min(requestedCount, freeSlots);
 
   const namePrefix =
     typeof body.namePrefix === "string" && body.namePrefix.trim()
