@@ -19,6 +19,7 @@ type Member = {
   id: string;
   name: string;
   championId: number;
+  championAlias: string;
   skinId: number;
   chromaId: number;
 };
@@ -78,6 +79,7 @@ app.post("/rooms", (req, res) => {
     id: ownerId,
     name,
     championId: 0,
+    championAlias: "",
     skinId: 0,
     chromaId: 0,
   };
@@ -117,6 +119,7 @@ app.post("/rooms/join", (req, res) => {
     id: memberId,
     name,
     championId: 0,
+    championAlias: "",
     skinId: 0,
     chromaId: 0,
   };
@@ -188,6 +191,7 @@ app.post("/rooms/:code/bots", (req, res) => {
       name: `${namePrefix} ${currentSize + 1 + i}`,
       championId:
         forcedChampionId !== undefined ? forcedChampionId : randomInt(1, 201),
+      championAlias: "",
       skinId:
         forcedSkinId !== undefined ? forcedSkinId : randomInt(1000, 999999),
       chromaId: forcedChromaId !== undefined ? forcedChromaId : 0,
@@ -241,16 +245,20 @@ io.on("connection", (socket) => {
       roomId: string;
       memberId: string;
       championId: number;
+      championAlias: string;
       skinId: number;
       chromaId: number;
     }) => {
-      const { roomId, memberId, championId, skinId, chromaId } = payload;
+      const { roomId, memberId, championId, championAlias, skinId, chromaId } =
+        payload;
+
       const room = rooms.get(roomId);
       if (!room) return;
       const member = room.members.get(memberId);
       if (!member) return;
 
       member.championId = championId;
+      member.championAlias = championAlias ?? "";
       member.skinId = skinId;
       member.chromaId = chromaId;
 
