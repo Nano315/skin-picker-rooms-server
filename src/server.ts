@@ -308,7 +308,12 @@ io.on("connection", (socket) => {
 
 /* --------- Lancement --------- */
 
-const PORT = process.env.PORT || 4000;
-httpServer.listen(PORT, () => {
-  console.log(`Rooms server listening on http://localhost:${PORT}`);
+const PORT = Number(process.env.PORT) || 4000;
+
+app.get("/", (req, res) => {
+  res.send("Skin Picker Rooms server is running");
+});
+
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Rooms server listening on port ${PORT}`);
 });
