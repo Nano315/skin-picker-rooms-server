@@ -17,6 +17,12 @@ const MAX_MEMBERS = 5;
 
 /* --------- Types --------- */
 
+type GroupSkinOption = {
+  skinId: number;
+  chromaId: number; // 0 = base
+  auraColor: string | null; // string reçue du front ("#6248FF", etc.)
+};
+
 type Member = {
   id: string;
   name: string;
@@ -24,6 +30,22 @@ type Member = {
   championAlias: string;
   skinId: number;
   chromaId: number;
+
+  // nouvelles infos pour la feature de groupe
+  options?: GroupSkinOption[];
+  ready?: boolean; // true quand le client a envoyé ses options
+};
+
+type ColorSynergy = {
+  type: "sameColor";
+  color: string;
+  members: string[]; // ids des membres qui ont au moins une option de cette couleur
+  coverage: number; // members.length / totalMembers
+  combinationCount: number; // nombre total de combinaisons possibles
+};
+
+type SynergySummary = {
+  colors: ColorSynergy[];
 };
 
 type Room = {
@@ -31,6 +53,7 @@ type Room = {
   code: string;
   ownerId: string;
   members: Map<string, Member>;
+  synergy?: SynergySummary;
 };
 
 const rooms = new Map<string, Room>();
@@ -64,7 +87,67 @@ function serializeRoom(room: Room) {
     code: room.code,
     ownerId: room.ownerId,
     members: Array.from(room.members.values()),
+    synergy: room.synergy ?? undefined,
   };
+}
+
+function recomputeSynergy(room: Room) {
+  const members = Array.from(room.members.values());
+  const total = members.length;
+
+  if (!total) {
+    room.synergy = { colors: [] };
+    return;
+  }
+
+  // 1) récupérer toutes les couleurs possibles
+  const allColors = new Set<string>();
+
+  for (const m of members) {
+    if (!m.options) continue;
+    for (const opt of m.options) {
+      if (!opt.auraColor) continue;
+      allColors.add(opt.auraColor);
+    }
+  }
+
+  const colors: ColorSynergy[] = [];
+
+  // 2) Pour chaque couleur, vérifier qui peut la jouer et combien d’options il a
+  for (const color of allColors) {
+    const participants: string[] = [];
+    let comboCount = 1;
+
+    for (const m of members) {
+      const opts = (m.options ?? []).filter((o) => o.auraColor === color);
+
+      if (!opts.length) {
+        comboCount = 0;
+        break; // ce joueur ne peut pas jouer cette couleur → pas de combo full team
+      }
+
+      participants.push(m.id);
+      comboCount *= opts.length;
+    }
+
+    // Pour notre proto : on ne garde que les couleurs jouables par tout le monde
+    if (comboCount === 0) continue;
+
+    colors.push({
+      type: "sameColor",
+      color,
+      members: participants,
+      coverage: participants.length / total, // devrait être =1 ici
+      combinationCount: comboCount,
+    });
+  }
+
+  // 3) tri des meilleures synergies vers les moins bonnes (ici toutes à 100%, mais prêt pour la suite)
+  colors.sort(
+    (a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount
+  );
+
+  room.synergy = { colors };
 }
 
 /* --------- REST : create / join --------- */
@@ -142,16 +225,7 @@ app.post("/rooms/join", (req, res) => {
   });
 });
 
-// ➜ Ajouter des bots dans une room (pour tests)
-//    POST /rooms/:code/bots
-//    Body JSON (tout optionnel) :
-//    {
-//      "count": 3,
-//      "namePrefix": "Bot",
-//      "championId": 266,
-//      "skinId": 266000,
-//      "chromaId": 0
-//    }
+// -> Ajouter des bots dans une room (pour tests)
 app.post("/rooms/:code/bots", (req, res) => {
   const rawCode = String(req.params.code ?? "")
     .trim()
@@ -282,6 +356,41 @@ io.on("connection", (socket) => {
     }
   );
 
+  // Réception des options complètes pour le champion lock
+  socket.on(
+    "owned-options",
+    (payload: {
+      roomId: string;
+      memberId: string;
+      championId: number;
+      championAlias: string;
+      options: GroupSkinOption[];
+    }) => {
+      const { roomId, memberId, championId, championAlias, options } = payload;
+
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      const member = room.members.get(memberId);
+      if (!member) return;
+
+      member.championId = championId;
+      member.championAlias = championAlias ?? "";
+      member.options = Array.isArray(options) ? options : [];
+      member.ready = true;
+
+      console.log(
+        `[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`
+      );
+
+      // On recalcule la synergie simple basée sur la couleur de chroma
+      recomputeSynergy(room);
+
+      // On renvoie le nouvel état de room (avec synergy) à tout le monde
+      io.to(room.id).emit("room-state", serializeRoom(room));
+    }
+  );
+
   // Déconnexion
   socket.on("disconnect", () => {
     const info = socketToMember.get(socket.id);
@@ -304,6 +413,88 @@ io.on("connection", (socket) => {
       io.to(roomId).emit("room-state", serializeRoom(room));
     }
   });
+
+  socket.on(
+    "request-group-reroll",
+    (payload: {
+      roomId: string;
+      memberId: string;
+      type: "sameColor";
+      color: string;
+    }) => {
+      const { roomId, memberId, type, color } = payload;
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      // sécurité : seul le owner peut déclencher
+      if (room.ownerId !== memberId) {
+        console.warn(
+          `[group-reroll] non-owner tried to reroll: member=${memberId} room=${roomId}`
+        );
+        return;
+      }
+
+      const synergy = room.synergy;
+      if (!synergy) return;
+
+      const entry = synergy.colors.find(
+        (c) => c.type === type && c.color === color && c.combinationCount > 0
+      );
+      if (!entry) {
+        console.warn(
+          `[group-reroll] no synergy entry for color=${color} in room=${roomId}`
+        );
+        return;
+      }
+
+      const picks: {
+        memberId: string;
+        skinId: number;
+        chromaId: number;
+      }[] = [];
+
+      for (const m of room.members.values()) {
+        const opts = (m.options ?? []).filter((o) => o.auraColor === color);
+
+        if (!opts.length) {
+          // "mouton noir" : on garde ce qu'il a déjà
+          picks.push({
+            memberId: m.id,
+            skinId: m.skinId,
+            chromaId: m.chromaId,
+          });
+          continue;
+        }
+
+        const idx = randomInt(0, opts.length);
+        const opt = opts[idx];
+
+        // on met à jour l'état serveur
+        m.skinId = opt.skinId;
+        m.chromaId = opt.chromaId;
+
+        picks.push({
+          memberId: m.id,
+          skinId: opt.skinId,
+          chromaId: opt.chromaId,
+        });
+      }
+
+      console.log(
+        `[group-reroll] applying combo color=${color} in room=${roomId}, picks=${picks.length}`
+      );
+
+      // 1) notifier tout le monde de la combinaison à appliquer
+      io.to(roomId).emit("group-apply-combo", {
+        type,
+        color,
+        picks,
+      });
+
+      // 2) renvoyer l'état de la room mis à jour
+      io.to(roomId).emit("room-state", serializeRoom(room));
+    }
+  );
 });
 
 /* --------- Lancement --------- */
