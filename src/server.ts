@@ -60,6 +60,51 @@ const rooms = new Map<string, Room>();
 const socketToMember = new Map<string, { roomId: string; memberId: string }>();
 const roomsByCode = new Map<string, Room>();
 
+function closeRoom(room: Room, reason: string) {
+  // prévenir tous les clients
+  io.to(room.id).emit("room-closed", { reason });
+
+  // déconnecter tous les sockets liés à cette room
+  for (const [socketId, info] of socketToMember) {
+    if (info.roomId === room.id) {
+      const sock = io.sockets.sockets.get(socketId);
+      if (sock) {
+        sock.leave(room.id);
+        sock.disconnect(true);
+      }
+      socketToMember.delete(socketId);
+    }
+  }
+
+  unregisterRoom(room);
+  console.log(`[room] closed room ${room.id} (${reason})`);
+}
+
+function handleMemberLeave(
+  room: Room,
+  memberId: string,
+  reason: "leave" | "disconnect"
+) {
+  const member = room.members.get(memberId);
+  if (!member) return;
+
+  room.members.delete(memberId);
+
+  // Si c’est le owner -> on ferme la room pour tout le monde
+  if (memberId === room.ownerId) {
+    closeRoom(room, reason === "leave" ? "owner-left" : "owner-disconnected");
+    return;
+  }
+
+  // Sinon comportement normal : on retire juste le joueur
+  if (room.members.size === 0) {
+    unregisterRoom(room);
+    console.log(`[room] deleted empty room ${room.id}`);
+  } else {
+    io.to(room.id).emit("room-state", serializeRoom(room));
+  }
+}
+
 function registerRoom(room: Room) {
   rooms.set(room.id, room);
   roomsByCode.set(room.code, room);
@@ -391,6 +436,24 @@ io.on("connection", (socket) => {
     }
   );
 
+  socket.on(
+    "leave-room",
+    ({ roomId, memberId }: { roomId: string; memberId: string }) => {
+      const room = rooms.get(roomId);
+      if (!room) return;
+      if (!room.members.has(memberId)) return;
+
+      console.log(
+        `[socket] ${socket.id} explicit leave room ${roomId} (member ${memberId})`
+      );
+
+      handleMemberLeave(room, memberId, "leave");
+
+      socketToMember.delete(socket.id);
+      socket.leave(roomId);
+    }
+  );
+
   // Déconnexion
   socket.on("disconnect", () => {
     const info = socketToMember.get(socket.id);
@@ -401,17 +464,11 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    room.members.delete(memberId);
     console.log(
-      `[socket] ${socket.id} left room ${roomId} (member ${memberId})`
+      `[socket] ${socket.id} disconnected from room ${roomId} (member ${memberId})`
     );
 
-    if (room.members.size === 0) {
-      unregisterRoom(room);
-      console.log(`[room] deleted empty room ${roomId}`);
-    } else {
-      io.to(roomId).emit("room-state", serializeRoom(room));
-    }
+    handleMemberLeave(room, memberId, "disconnect");
   });
 
   socket.on(
