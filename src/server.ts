@@ -541,6 +541,15 @@ io.on("connection", (socket) => {
         `[group-reroll] applying combo color=${color} in room=${roomId}, picks=${picks.length}`
       );
 
+      // Mettre à jour l'état interne du serveur IMMEDIATEMENT
+      for (const pick of picks) {
+        const member = room.members.get(pick.memberId);
+        if (member) {
+          member.skinId = pick.skinId;
+          member.chromaId = pick.chromaId;
+        }
+      }
+
       // 1) notifier tout le monde de la combinaison à appliquer
       io.to(roomId).emit("group-apply-combo", {
         type,
