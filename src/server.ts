@@ -59,6 +59,7 @@ type Room = {
     color: string;
     timestamp: number;
   };
+  activeColor?: string;
 };
 
 const rooms = new Map<string, Room>();
@@ -141,6 +142,7 @@ function serializeRoom(room: Room) {
     members: Array.from(room.members.values()),
     synergy: room.synergy ?? undefined,
     activeSynergy: room.activeSynergy,
+    activeColor: room.activeColor,
   };
 }
 
@@ -588,6 +590,10 @@ io.on("connection", (socket) => {
         color,
         timestamp: Date.now(),
       };
+
+      if (type === "sameColor") {
+        room.activeColor = color;
+      }
 
       // 1) notifier tout le monde de la combinaison à appliquer
       io.to(roomId).emit("group-apply-combo", {
