@@ -33,7 +33,7 @@ type Member = {
 
   // nouvelles infos pour la feature de groupe
   options?: GroupSkinOption[];
-  ready?: boolean; // true quand le client a envoyé ses options
+  isReady: boolean; // true quand le client a envoyé ses options (remplace ready?)
 };
 
 type ColorSynergy = {
@@ -54,6 +54,11 @@ type Room = {
   ownerId: string;
   members: Map<string, Member>;
   synergy?: SynergySummary;
+  activeSynergy?: {
+    type: string;
+    color: string;
+    timestamp: number;
+  };
 };
 
 const rooms = new Map<string, Room>();
@@ -101,6 +106,8 @@ function handleMemberLeave(
     unregisterRoom(room);
     console.log(`[room] deleted empty room ${room.id}`);
   } else {
+    // Recalculer la synergie car un membre est parti
+    recomputeSynergy(room);
     io.to(room.id).emit("room-state", serializeRoom(room));
   }
 }
@@ -133,22 +140,30 @@ function serializeRoom(room: Room) {
     ownerId: room.ownerId,
     members: Array.from(room.members.values()),
     synergy: room.synergy ?? undefined,
+    activeSynergy: room.activeSynergy,
   };
 }
 
 function recomputeSynergy(room: Room) {
-  const members = Array.from(room.members.values());
-  const total = members.length;
+  const allMembers = Array.from(room.members.values());
 
-  if (!total) {
+  // Modif: On considère qu'un membre est "prêt" pour la synergie s'il a envoyé ses options
+  // ET qu'il a au moins une option (ce qui veut dire qu'il a lock un champion valide)
+  const readyMembers = allMembers.filter((m) => m.options && m.options.length > 0);
+
+  const totalReady = readyMembers.length;
+
+  // On évite le spam de logs (uniquement si le nb change ou debug spécifique)
+  // console.log(`[recomputeSynergy] Room ${room.code}: ${totalReady}/${allMembers.length} members ready.`);
+
+  if (totalReady < 1) { // On autorise 1 seul joueur pour tester (mode solo)
     room.synergy = { colors: [] };
     return;
   }
 
-  // 1) récupérer toutes les couleurs possibles
   const allColors = new Set<string>();
 
-  for (const m of members) {
+  for (const m of readyMembers) {
     if (!m.options) continue;
     for (const opt of m.options) {
       if (!opt.auraColor) continue;
@@ -158,41 +173,47 @@ function recomputeSynergy(room: Room) {
 
   const colors: ColorSynergy[] = [];
 
-  // 2) Pour chaque couleur, vérifier qui peut la jouer et combien d’options il a
   for (const color of allColors) {
     const participants: string[] = [];
     let comboCount = 1;
 
-    for (const m of members) {
+    for (const m of readyMembers) {
       const opts = (m.options ?? []).filter((o) => o.auraColor === color);
 
+      // Si un joueur n'a pas la couleur, il casse la chaine "parfaite", 
+      // mais on peut vouloir afficher les synergies partielles.
       if (!opts.length) {
+        // Pour l'instant, on est strict : tout le monde doit avoir la couleur
+        // Sinon le bouton "reroll group" va faire fail ceux qui ne l'ont pas.
         comboCount = 0;
-        break; // ce joueur ne peut pas jouer cette couleur → pas de combo full team
+        break;
       }
 
       participants.push(m.id);
       comboCount *= opts.length;
     }
 
-    // Pour notre proto : on ne garde que les couleurs jouables par tout le monde
-    if (comboCount === 0) continue;
-
-    colors.push({
-      type: "sameColor",
-      color,
-      members: participants,
-      coverage: participants.length / total, // devrait être =1 ici
-      combinationCount: comboCount,
-    });
+    if (comboCount > 0) {
+      colors.push({
+        type: "sameColor",
+        color,
+        members: participants,
+        coverage: 1, // 100% des readyMembers
+        combinationCount: comboCount,
+      });
+    }
   }
 
-  // 3) tri des meilleures synergies vers les moins bonnes (ici toutes à 100%, mais prêt pour la suite)
   colors.sort(
     (a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount
   );
 
   room.synergy = { colors };
+
+  // Log seulement si on trouve quelque chose, pour éviter le spam
+  if (colors.length > 0) {
+    console.log(`[Synergy] Room ${room.code}: Found ${colors.length} synergies (Best: ${colors[0].color})`);
+  }
 }
 
 /* --------- REST : create / join --------- */
@@ -212,6 +233,7 @@ app.post("/rooms", (req, res) => {
     championAlias: "",
     skinId: 0,
     chromaId: 0,
+    isReady: false,
   };
 
   const room: Room = {
@@ -257,6 +279,7 @@ app.post("/rooms/join", (req, res) => {
     championAlias: "",
     skinId: 0,
     chromaId: 0,
+    isReady: false,
   };
 
   room.members.set(memberId, member);
@@ -330,11 +353,16 @@ app.post("/rooms/:code/bots", (req, res) => {
       skinId:
         forcedSkinId !== undefined ? forcedSkinId : randomInt(1000, 999999),
       chromaId: forcedChromaId !== undefined ? forcedChromaId : 0,
+      isReady: true, // Bots are always ready!
+      options: [], // Bots don't have options for now, or we could mock them
     };
 
     room.members.set(memberId, bot);
     createdBots.push(bot);
   }
+
+  // Recalculate synergy with new bots
+  recomputeSynergy(room);
 
   io.to(room.id).emit("room-state", serializeRoom(room));
 
@@ -369,6 +397,7 @@ io.on("connection", (socket) => {
       socketToMember.set(socket.id, { roomId, memberId });
 
       // Envoyer l’état actuel de la room à tout le monde
+      // Note: serializeRoom includes activeSynergy now, so late joiners get it.
       io.to(roomId).emit("room-state", serializeRoom(room));
     }
   );
@@ -422,7 +451,7 @@ io.on("connection", (socket) => {
       member.championId = championId;
       member.championAlias = championAlias ?? "";
       member.options = Array.isArray(options) ? options : [];
-      member.ready = true;
+      member.isReady = true;
 
       console.log(
         `[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`
@@ -510,7 +539,10 @@ io.on("connection", (socket) => {
         chromaId: number;
       }[] = [];
 
+      // On itère sur les membres PRÉSENTS et PRÊTS
       for (const m of room.members.values()) {
+        if (!m.isReady) continue; // On ne change pas le skin de ceux qui ne sont pas prêts
+
         const opts = (m.options ?? []).filter((o) => o.auraColor === color);
 
         if (!opts.length) {
@@ -549,6 +581,13 @@ io.on("connection", (socket) => {
           member.chromaId = pick.chromaId;
         }
       }
+
+      // Sauvegarder la synergie active pour les late joiners
+      room.activeSynergy = {
+        type,
+        color,
+        timestamp: Date.now(),
+      };
 
       // 1) notifier tout le monde de la combinaison à appliquer
       io.to(roomId).emit("group-apply-combo", {
