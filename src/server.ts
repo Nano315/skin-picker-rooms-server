@@ -3,10 +3,22 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import { randomUUID, randomInt } from "crypto";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 const app = express();
-app.use(cors());
+app.use(helmet());
+app.use(cors()); // Note: In production, configure origin explicitly
 app.use(express.json());
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true, 
+  legacyHeaders: false,
+});
+
+app.use(limiter);
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
@@ -455,12 +467,22 @@ io.on("connection", (socket) => {
       member.options = Array.isArray(options) ? options : [];
       member.isReady = true;
 
+      // [SECURITY] Fix DoS: Limit max options size
+      if (member.options && member.options.length > 2000) {
+        console.warn(`[Security] Member ${memberId} sent too many options (${member.options.length}). Truncating.`);
+        member.options = member.options.slice(0, 2000);
+      }
+
       console.log(
-        `[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`
+        `[owned-options] member=${memberId} room=${roomId} options=${member.options?.length}`
       );
 
       // On recalcule la synergie simple basée sur la couleur de chroma
-      recomputeSynergy(room);
+      try {
+        recomputeSynergy(room);
+      } catch (err) {
+        console.error(`[Synergy] Error recomputing synergy for room ${roomId}:`, err);
+      }
 
       // On renvoie le nouvel état de room (avec synergy) à tout le monde
       io.to(room.id).emit("room-state", serializeRoom(room));
