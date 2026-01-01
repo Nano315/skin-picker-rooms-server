@@ -54,6 +54,21 @@ export class RoomService {
     return { room, member: owner };
   }
 
+  public createBotRoom(): { room: Room; member: Member } {
+    const { room, member } = this.createRoom("Bot Owner");
+    
+    // Customize the bot
+    member.championId = randomInt(1, 160);
+    member.skinId = randomInt(26000, 26050); // Just some random range
+    member.chromaId = 0;
+    member.isReady = true;
+
+    // We could add options if we want to test synergy immediately
+    // For now, simple ready bot
+    
+    return { room, member };
+  }
+
   public getRoom(roomId: string): Room | undefined {
     return this.rooms.get(roomId);
   }

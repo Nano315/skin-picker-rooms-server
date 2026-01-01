@@ -22,6 +22,23 @@ export const createRoom = (req: Request, res: Response) => {
   }
 };
 
+export const createBotRoom = (req: Request, res: Response) => {
+  try {
+    const { room, member } = roomService.createBotRoom();
+
+    res.json({
+      roomId: room.id,
+      code: room.code,
+      memberId: member.id,
+      owner: false, // The requester is NOT the owner
+      room: roomService.serializeRoom(room),
+    });
+  } catch (err) {
+    logger.error(`Error creating bot room: ${err}`);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 export const joinRoom = (req: Request, res: Response) => {
   try {
     const code = String(req.body?.code ?? "").trim().toUpperCase();

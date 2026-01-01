@@ -43,3 +43,10 @@ export type Room = {
   };
   activeColor?: string;
 };
+
+export type SuggestionPayload = {
+  roomId: string;
+  senderId: string;
+  skinId: number;
+  chromaId: number;
+};

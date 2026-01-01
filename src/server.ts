@@ -196,6 +196,38 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("group-apply-combo", { type, color, picks });
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   });
+
+  socket.on("suggest-color", (payload: any) => {
+    const { roomId, senderId, skinId, chromaId } = payload;
+    
+    // 1. Validation basics
+    const room = roomService.getRoom(roomId);
+    if (!room) return;
+
+    // 2. Verify sender is in the room
+    const sender = room.members.get(senderId);
+    if (!sender) {
+        logger.warn(`[suggest-color] sender ${senderId} not found in room ${roomId}`);
+        return;
+    }
+
+    logger.info(`[suggest-color] from ${sender.name} (${senderId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+
+    // 3. Find owner socket to send private message (optional) or broadcast to room
+    // The requirement is "Relaye l'information à l'owner".
+    // We can try to find the owner's socket, or just emit to the room with a specific event that clients ignore if they are not the owner.
+    // For simplicity and robustness, existing pattern uses broadcasting room-state. 
+    // We will emit 'color-suggestion-received' to the room, payload containing targetOwnerId? 
+    // Actually, the client (Owner) just needs to know *someone* suggested something.
+    // Let's send to the room. The Owner client will listen and display the toast/notification.
+    
+    io.to(roomId).emit("color-suggestion-received", {
+        senderId,
+        senderName: sender.name,
+        skinId,
+        chromaId
+    });
+  });
 });
 
 // --- Start ---
