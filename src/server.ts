@@ -5,7 +5,8 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
-import { getRoomOrWarn, getMemberOrWarn, getRoomAndMemberOrWarn } from "./utils/socketHelpers";
+import { getRoomOrWarn, getRoomAndMemberOrWarn, safeHandler } from "./utils/socketHelpers";
+import { AppError, ErrorCodes } from "./utils/errors";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
 import type {
@@ -73,22 +74,37 @@ function handleMemberLeave(roomId: string, memberId: string, reason: string) {
 io.on("connection", (socket) => {
   logger.info(`[socket] connected ${socket.id}`);
 
-  socket.on("join-room", ({ roomId, memberId }: JoinRoomPayload) => {
-    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "join-room");
-    if (!room || !member) return;
+  socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId }, sock) => {
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
 
-    logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
 
-    socket.join(roomId);
-    socketToMember.set(socket.id, { roomId, memberId });
+    logger.debug(`[socket] ${sock.id} join room ${roomId} as member ${memberId}`);
+
+    sock.join(roomId);
+    socketToMember.set(sock.id, { roomId, memberId });
 
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
-  });
+  }));
 
-  socket.on("update-selection", (payload: UpdateSelectionPayload) => {
+  socket.on("update-selection", safeHandler<UpdateSelectionPayload>("update-selection", (payload) => {
     const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
-    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "update-selection");
-    if (!room || !member) return;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
 
     member.championId = championId;
     member.championAlias = championAlias ?? "";
@@ -96,12 +112,20 @@ io.on("connection", (socket) => {
     member.chromaId = chromaId;
 
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
-  });
+  }));
 
-  socket.on("owned-options", (payload: OwnedOptionsPayload) => {
+  socket.on("owned-options", safeHandler<OwnedOptionsPayload>("owned-options", (payload) => {
     const { roomId, memberId, championId, championAlias, options } = payload;
-    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "owned-options");
-    if (!room || !member) return;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
 
     member.championId = championId;
     member.championAlias = championAlias ?? "";
@@ -110,29 +134,29 @@ io.on("connection", (socket) => {
 
     // Security check
     if (member.options && member.options.length > 2000) {
-        logger.warn(`[Security] Member ${memberId} sent too many options (${member.options.length}). Truncating.`);
-        member.options = member.options.slice(0, 2000);
+      logger.warn(`[owned-options] Member ${memberId} sent too many options (${member.options.length}). Truncating.`, {
+        roomId,
+        memberId,
+        optionsCount: member.options.length,
+      });
+      member.options = member.options.slice(0, 2000);
     }
 
     logger.debug(`[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`);
 
-    try {
-        roomService.recomputeSynergy(room);
-    } catch (err) {
-        logger.error(`Error recomputing synergy: ${err}`);
-    }
+    roomService.recomputeSynergy(room);
 
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
-  });
+  }));
 
-  socket.on("leave-room", ({ roomId, memberId }: LeaveRoomPayload) => {
-    logger.debug(`[socket] ${socket.id} explicit leave room ${roomId}`);
-    
+  socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId }, sock) => {
+    logger.debug(`[leave-room] ${sock.id} explicit leave room ${roomId}`);
+
     handleMemberLeave(roomId, memberId, "leave");
 
-    socketToMember.delete(socket.id);
-    socket.leave(roomId);
-  });
+    socketToMember.delete(sock.id);
+    sock.leave(roomId);
+  }));
 
   socket.on("disconnect", () => {
     const info = socketToMember.get(socket.id);
@@ -144,79 +168,92 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("request-group-reroll", (payload: RequestGroupRerollPayload) => {
+  socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload, sock) => {
     const { roomId, memberId, type, color } = payload;
-    const room = getRoomOrWarn(roomService, roomId, "request-group-reroll");
-    if (!room) return;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
 
     if (room.ownerId !== memberId) {
-        logger.warn(`[group-reroll] non-owner tried to reroll: ${memberId}`);
-        return;
+      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can trigger group reroll`, true, {
+        roomId,
+        memberId,
+        ownerId: room.ownerId,
+      });
     }
 
     const synergy = room.synergy;
-    if (!synergy) return;
+    if (!synergy) {
+      logger.warn(`[request-group-reroll] No synergy computed for room ${roomId}`);
+      return;
+    }
 
     const entry = synergy.colors.find((c) => c.type === type && c.color === color);
     if (!entry) {
-        logger.warn(`[group-reroll] no synergy entry for color=${color} in room=${roomId}`);
-        return;
+      logger.warn(`[request-group-reroll] No synergy entry for color=${color} in room=${roomId}`);
+      return;
     }
 
     const picks: { memberId: string; skinId: number; chromaId: number }[] = [];
 
     // Reroll logic
     for (const m of room.members.values()) {
-        if (!m.isReady) continue;
+      if (!m.isReady) continue;
 
-        const opts = (m.options ?? []).filter((o) => o.auraColor === color);
-        if (!opts.length) {
-            // Keep current
-            picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
-            continue;
-        }
+      const opts = (m.options ?? []).filter((o) => o.auraColor === color);
+      if (!opts.length) {
+        // Keep current
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
 
-        const idx = randomInt(0, opts.length);
-        const opt = opts[idx];
+      const idx = randomInt(0, opts.length);
+      const opt = opts[idx];
 
-        m.skinId = opt.skinId;
-        m.chromaId = opt.chromaId;
+      m.skinId = opt.skinId;
+      m.chromaId = opt.chromaId;
 
-        picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
+      picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
     }
 
-    logger.info(`[group-reroll] applying combo color=${color} in room=${roomId}`);
+    logger.info(`[request-group-reroll] applying combo color=${color} in room=${roomId}`);
 
     room.activeSynergy = { type, color, timestamp: Date.now() };
     if (type === "sameColor") {
-        room.activeColor = color;
+      room.activeColor = color;
     }
 
     io.to(roomId).emit("group-apply-combo", { type, color, picks });
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
-  });
+  }));
 
-  socket.on("suggest-color", (payload: SuggestColorPayload) => {
+  socket.on("suggest-color", safeHandler<SuggestColorPayload>("suggest-color", (payload) => {
     const { roomId, memberId, skinId, chromaId } = payload;
 
     logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
 
-    // Validate room and sender
-    const { room, member: sender } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "suggest-color");
-    if (!room || !sender) return;
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    const sender = room.members.get(memberId);
+    if (!sender) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
 
     logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
 
-    // 3. Broadcast to room - Owner client will listen and display the suggestion
-    logger.info(`[suggest-color] broadcasting suggestion to room ${roomId}`);
-
+    // Broadcast to room - Owner client will listen and display the suggestion
     io.to(roomId).emit("color-suggestion-received", {
-        memberId,
-        senderName: sender.name,
-        skinId,
-        chromaId
+      memberId,
+      senderName: sender.name,
+      skinId,
+      chromaId,
     });
-  });
+  }));
 });
 
 // --- Start ---

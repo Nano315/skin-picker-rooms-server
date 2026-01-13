@@ -18,12 +18,27 @@ const colors = {
 
 winston.addColors(colors);
 
+/**
+ * Custom format that includes metadata for structured logging.
+ * Logs include timestamp, level, message, and any additional context.
+ */
 const format = winston.format.combine(
   winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss:ms" }),
   winston.format.colorize({ all: true }),
-  winston.format.printf(
-    (info) => `[${info.timestamp}] [${info.level}]: ${info.message}`
-  )
+  winston.format.printf((info) => {
+    // Extract known fields
+    const { timestamp, level, message, ...meta } = info;
+
+    // Format base message
+    let log = `[${timestamp}] [${level}]: ${message}`;
+
+    // Add metadata if present (for structured logging)
+    if (Object.keys(meta).length > 0) {
+      log += ` ${JSON.stringify(meta)}`;
+    }
+
+    return log;
+  })
 );
 
 const transports = [

@@ -20,7 +20,21 @@ const colors = {
     debug: "white",
 };
 winston_1.default.addColors(colors);
-const format = winston_1.default.format.combine(winston_1.default.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss:ms" }), winston_1.default.format.colorize({ all: true }), winston_1.default.format.printf((info) => `[${info.timestamp}] [${info.level}]: ${info.message}`));
+/**
+ * Custom format that includes metadata for structured logging.
+ * Logs include timestamp, level, message, and any additional context.
+ */
+const format = winston_1.default.format.combine(winston_1.default.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss:ms" }), winston_1.default.format.colorize({ all: true }), winston_1.default.format.printf((info) => {
+    // Extract known fields
+    const { timestamp, level, message, ...meta } = info;
+    // Format base message
+    let log = `[${timestamp}] [${level}]: ${message}`;
+    // Add metadata if present (for structured logging)
+    if (Object.keys(meta).length > 0) {
+        log += ` ${JSON.stringify(meta)}`;
+    }
+    return log;
+}));
 const transports = [
     new winston_1.default.transports.Console(),
     // Add file transport here for production if needed

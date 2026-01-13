@@ -1,6 +1,8 @@
+import type { Socket } from "socket.io";
 import type { Room, Member } from "../types";
 import { RoomService } from "../services/room.service";
 import { logger } from "./logger";
+import { AppError, formatErrorResponse, ErrorCodes } from "./errors";
 
 /**
  * Gets a room by ID, logging a warning if not found.
@@ -53,4 +55,71 @@ export function getRoomAndMemberOrWarn(
   }
   const member = getMemberOrWarn(room, memberId, eventName);
   return { room, member };
+}
+
+/**
+ * Wraps a Socket.io event handler with try-catch error handling.
+ * Logs errors appropriately and emits error events to the client.
+ *
+ * @param eventName - The name of the Socket.io event (for logging)
+ * @param handler - The handler function to wrap
+ * @returns A wrapped handler function with error handling
+ */
+export function safeHandler<T>(
+  eventName: string,
+  handler: (payload: T, socket: Socket) => void | Promise<void>
+): (payload: T, socket: Socket) => void {
+  return (payload: T, socket: Socket) => {
+    try {
+      const result = handler(payload, socket);
+
+      // Handle async handlers
+      if (result instanceof Promise) {
+        result.catch((error: unknown) => {
+          handleError(eventName, error, payload, socket);
+        });
+      }
+    } catch (error: unknown) {
+      handleError(eventName, error, payload, socket);
+    }
+  };
+}
+
+/**
+ * Internal function to handle errors consistently.
+ */
+function handleError<T>(
+  eventName: string,
+  error: unknown,
+  payload: T,
+  socket: Socket
+): void {
+  if (error instanceof AppError) {
+    // Operational error - expected, log as warning
+    logger.warn(`[${eventName}] ${error.message}`, {
+      code: error.code,
+      context: error.context,
+      socketId: socket.id,
+    });
+
+    // Emit error to client
+    socket.emit("error", formatErrorResponse(error));
+  } else {
+    // Programming error - unexpected, log as error with full context
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
+    logger.error(`[${eventName}] Unexpected error: ${errorMessage}`, {
+      error: errorMessage,
+      stack: errorStack,
+      payload,
+      socketId: socket.id,
+    });
+
+    // Emit generic error to client (don't expose internal details)
+    socket.emit("error", {
+      code: ErrorCodes.INTERNAL_ERROR,
+      message: "An unexpected error occurred",
+    });
+  }
 }
