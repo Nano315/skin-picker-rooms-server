@@ -60,7 +60,8 @@ function handleMemberLeave(roomId, memberId, reason) {
 }
 io.on("connection", (socket) => {
     logger_1.logger.info(`[socket] connected ${socket.id}`);
-    socket.on("join-room", (0, socketHelpers_1.safeHandler)("join-room", ({ roomId, memberId }, sock) => {
+    const safeHandler = (0, socketHelpers_1.createSafeHandler)(socket);
+    socket.on("join-room", safeHandler("join-room", ({ roomId, memberId }) => {
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -69,12 +70,12 @@ io.on("connection", (socket) => {
         if (!member) {
             throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
         }
-        logger_1.logger.debug(`[socket] ${sock.id} join room ${roomId} as member ${memberId}`);
-        sock.join(roomId);
-        socketToMember.set(sock.id, { roomId, memberId });
+        logger_1.logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
+        socket.join(roomId);
+        socketToMember.set(socket.id, { roomId, memberId });
         io.to(roomId).emit("room-state", roomService.serializeRoom(room));
     }));
-    socket.on("update-selection", (0, socketHelpers_1.safeHandler)("update-selection", (payload) => {
+    socket.on("update-selection", safeHandler("update-selection", (payload) => {
         const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
@@ -90,7 +91,7 @@ io.on("connection", (socket) => {
         member.chromaId = chromaId;
         io.to(roomId).emit("room-state", roomService.serializeRoom(room));
     }));
-    socket.on("owned-options", (0, socketHelpers_1.safeHandler)("owned-options", (payload) => {
+    socket.on("owned-options", safeHandler("owned-options", (payload) => {
         const { roomId, memberId, championId, championAlias, options } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
@@ -117,11 +118,11 @@ io.on("connection", (socket) => {
         roomService.recomputeSynergy(room);
         io.to(roomId).emit("room-state", roomService.serializeRoom(room));
     }));
-    socket.on("leave-room", (0, socketHelpers_1.safeHandler)("leave-room", ({ roomId, memberId }, sock) => {
-        logger_1.logger.debug(`[leave-room] ${sock.id} explicit leave room ${roomId}`);
+    socket.on("leave-room", safeHandler("leave-room", ({ roomId, memberId }) => {
+        logger_1.logger.debug(`[leave-room] ${socket.id} explicit leave room ${roomId}`);
         handleMemberLeave(roomId, memberId, "leave");
-        socketToMember.delete(sock.id);
-        sock.leave(roomId);
+        socketToMember.delete(socket.id);
+        socket.leave(roomId);
     }));
     socket.on("disconnect", () => {
         const info = socketToMember.get(socket.id);
@@ -131,7 +132,7 @@ io.on("connection", (socket) => {
             handleMemberLeave(info.roomId, info.memberId, "disconnect");
         }
     });
-    socket.on("request-group-reroll", (0, socketHelpers_1.safeHandler)("request-group-reroll", (payload, sock) => {
+    socket.on("request-group-reroll", safeHandler("request-group-reroll", (payload) => {
         const { roomId, memberId, type, color } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
@@ -179,7 +180,7 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("group-apply-combo", { type, color, picks });
         io.to(roomId).emit("room-state", roomService.serializeRoom(room));
     }));
-    socket.on("suggest-color", (0, socketHelpers_1.safeHandler)("suggest-color", (payload) => {
+    socket.on("suggest-color", safeHandler("suggest-color", (payload) => {
         const { roomId, memberId, skinId, chromaId } = payload;
         logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
         const room = roomService.getRoom(roomId);
