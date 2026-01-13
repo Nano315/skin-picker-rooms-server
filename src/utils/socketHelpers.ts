@@ -58,30 +58,37 @@ export function getRoomAndMemberOrWarn(
 }
 
 /**
- * Wraps a Socket.io event handler with try-catch error handling.
- * Logs errors appropriately and emits error events to the client.
+ * Creates a safe handler factory bound to a specific socket.
+ * Use this to wrap Socket.io event handlers with try-catch error handling.
  *
- * @param eventName - The name of the Socket.io event (for logging)
- * @param handler - The handler function to wrap
- * @returns A wrapped handler function with error handling
+ * @param socket - The Socket.io socket instance
+ * @returns A function that wraps handlers with error handling
+ *
+ * @example
+ * io.on("connection", (socket) => {
+ *   const safe = createSafeHandler(socket);
+ *   socket.on("join-room", safe("join-room", (payload) => { ... }));
+ * });
  */
-export function safeHandler<T>(
-  eventName: string,
-  handler: (payload: T, socket: Socket) => void | Promise<void>
-): (payload: T, socket: Socket) => void {
-  return (payload: T, socket: Socket) => {
-    try {
-      const result = handler(payload, socket);
+export function createSafeHandler(socket: Socket) {
+  return function safeHandler<T>(
+    eventName: string,
+    handler: (payload: T) => void | Promise<void>
+  ): (payload: T) => void {
+    return (payload: T) => {
+      try {
+        const result = handler(payload);
 
-      // Handle async handlers
-      if (result instanceof Promise) {
-        result.catch((error: unknown) => {
-          handleError(eventName, error, payload, socket);
-        });
+        // Handle async handlers
+        if (result instanceof Promise) {
+          result.catch((error: unknown) => {
+            handleError(eventName, error, payload, socket);
+          });
+        }
+      } catch (error: unknown) {
+        handleError(eventName, error, payload, socket);
       }
-    } catch (error: unknown) {
-      handleError(eventName, error, payload, socket);
-    }
+    };
   };
 }
 

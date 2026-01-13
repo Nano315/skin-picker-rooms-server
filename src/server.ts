@@ -5,7 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
-import { getRoomOrWarn, getRoomAndMemberOrWarn, safeHandler } from "./utils/socketHelpers";
+import { createSafeHandler } from "./utils/socketHelpers";
 import { AppError, ErrorCodes } from "./utils/errors";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
@@ -73,8 +73,9 @@ function handleMemberLeave(roomId: string, memberId: string, reason: string) {
 
 io.on("connection", (socket) => {
   logger.info(`[socket] connected ${socket.id}`);
+  const safeHandler = createSafeHandler(socket);
 
-  socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId }, sock) => {
+  socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId }) => {
     const room = roomService.getRoom(roomId);
     if (!room) {
       throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -85,10 +86,10 @@ io.on("connection", (socket) => {
       throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
     }
 
-    logger.debug(`[socket] ${sock.id} join room ${roomId} as member ${memberId}`);
+    logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
 
-    sock.join(roomId);
-    socketToMember.set(sock.id, { roomId, memberId });
+    socket.join(roomId);
+    socketToMember.set(socket.id, { roomId, memberId });
 
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   }));
@@ -149,13 +150,13 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   }));
 
-  socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId }, sock) => {
-    logger.debug(`[leave-room] ${sock.id} explicit leave room ${roomId}`);
+  socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId }) => {
+    logger.debug(`[leave-room] ${socket.id} explicit leave room ${roomId}`);
 
     handleMemberLeave(roomId, memberId, "leave");
 
-    socketToMember.delete(sock.id);
-    sock.leave(roomId);
+    socketToMember.delete(socket.id);
+    socket.leave(roomId);
   }));
 
   socket.on("disconnect", () => {
@@ -168,7 +169,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload, sock) => {
+  socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload) => {
     const { roomId, memberId, type, color } = payload;
 
     const room = roomService.getRoom(roomId);
