@@ -5,11 +5,10 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
+import { getRoomOrWarn, getMemberOrWarn, getRoomAndMemberOrWarn } from "./utils/socketHelpers";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
 import type {
-  GroupSkinOption,
-  Member,
   JoinRoomPayload,
   LeaveRoomPayload,
   UpdateSelectionPayload,
@@ -75,11 +74,8 @@ io.on("connection", (socket) => {
   logger.info(`[socket] connected ${socket.id}`);
 
   socket.on("join-room", ({ roomId, memberId }: JoinRoomPayload) => {
-    const room = roomService.getRoom(roomId);
-    if (!room) return;
-
-    const member = room.members.get(memberId);
-    if (!member) return;
+    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "join-room");
+    if (!room || !member) return;
 
     logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
 
@@ -91,11 +87,8 @@ io.on("connection", (socket) => {
 
   socket.on("update-selection", (payload: UpdateSelectionPayload) => {
     const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
-    const room = roomService.getRoom(roomId);
-    if (!room) return;
-    
-    const member = room.members.get(memberId);
-    if (!member) return;
+    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "update-selection");
+    if (!room || !member) return;
 
     member.championId = championId;
     member.championAlias = championAlias ?? "";
@@ -107,11 +100,8 @@ io.on("connection", (socket) => {
 
   socket.on("owned-options", (payload: OwnedOptionsPayload) => {
     const { roomId, memberId, championId, championAlias, options } = payload;
-    const room = roomService.getRoom(roomId);
-    if (!room) return;
-
-    const member = room.members.get(memberId);
-    if (!member) return;
+    const { room, member } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "owned-options");
+    if (!room || !member) return;
 
     member.championId = championId;
     member.championAlias = championAlias ?? "";
@@ -156,7 +146,7 @@ io.on("connection", (socket) => {
 
   socket.on("request-group-reroll", (payload: RequestGroupRerollPayload) => {
     const { roomId, memberId, type, color } = payload;
-    const room = roomService.getRoom(roomId);
+    const room = getRoomOrWarn(roomService, roomId, "request-group-reroll");
     if (!room) return;
 
     if (room.ownerId !== memberId) {
@@ -211,19 +201,9 @@ io.on("connection", (socket) => {
 
     logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
 
-    // 1. Validation basics
-    const room = roomService.getRoom(roomId);
-    if (!room) {
-        logger.warn(`[suggest-color] room ${roomId} not found`);
-        return;
-    }
-
-    // 2. Verify sender is in the room
-    const sender = room.members.get(memberId);
-    if (!sender) {
-        logger.warn(`[suggest-color] member ${memberId} not found in room ${roomId}`);
-        return;
-    }
+    // Validate room and sender
+    const { room, member: sender } = getRoomAndMemberOrWarn(roomService, roomId, memberId, "suggest-color");
+    if (!room || !sender) return;
 
     logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
 

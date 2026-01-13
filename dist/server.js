@@ -10,6 +10,7 @@ const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const logger_1 = require("./utils/logger");
+const socketHelpers_1 = require("./utils/socketHelpers");
 const room_routes_1 = __importDefault(require("./routes/room.routes"));
 const room_service_1 = require("./services/room.service");
 const crypto_1 = require("crypto");
@@ -59,11 +60,8 @@ function handleMemberLeave(roomId, memberId, reason) {
 io.on("connection", (socket) => {
     logger_1.logger.info(`[socket] connected ${socket.id}`);
     socket.on("join-room", ({ roomId, memberId }) => {
-        const room = roomService.getRoom(roomId);
-        if (!room)
-            return;
-        const member = room.members.get(memberId);
-        if (!member)
+        const { room, member } = (0, socketHelpers_1.getRoomAndMemberOrWarn)(roomService, roomId, memberId, "join-room");
+        if (!room || !member)
             return;
         logger_1.logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
         socket.join(roomId);
@@ -72,11 +70,8 @@ io.on("connection", (socket) => {
     });
     socket.on("update-selection", (payload) => {
         const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
-        const room = roomService.getRoom(roomId);
-        if (!room)
-            return;
-        const member = room.members.get(memberId);
-        if (!member)
+        const { room, member } = (0, socketHelpers_1.getRoomAndMemberOrWarn)(roomService, roomId, memberId, "update-selection");
+        if (!room || !member)
             return;
         member.championId = championId;
         member.championAlias = championAlias ?? "";
@@ -86,11 +81,8 @@ io.on("connection", (socket) => {
     });
     socket.on("owned-options", (payload) => {
         const { roomId, memberId, championId, championAlias, options } = payload;
-        const room = roomService.getRoom(roomId);
-        if (!room)
-            return;
-        const member = room.members.get(memberId);
-        if (!member)
+        const { room, member } = (0, socketHelpers_1.getRoomAndMemberOrWarn)(roomService, roomId, memberId, "owned-options");
+        if (!room || !member)
             return;
         member.championId = championId;
         member.championAlias = championAlias ?? "";
@@ -126,7 +118,7 @@ io.on("connection", (socket) => {
     });
     socket.on("request-group-reroll", (payload) => {
         const { roomId, memberId, type, color } = payload;
-        const room = roomService.getRoom(roomId);
+        const room = (0, socketHelpers_1.getRoomOrWarn)(roomService, roomId, "request-group-reroll");
         if (!room)
             return;
         if (room.ownerId !== memberId) {
@@ -169,18 +161,10 @@ io.on("connection", (socket) => {
     socket.on("suggest-color", (payload) => {
         const { roomId, memberId, skinId, chromaId } = payload;
         logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
-        // 1. Validation basics
-        const room = roomService.getRoom(roomId);
-        if (!room) {
-            logger_1.logger.warn(`[suggest-color] room ${roomId} not found`);
+        // Validate room and sender
+        const { room, member: sender } = (0, socketHelpers_1.getRoomAndMemberOrWarn)(roomService, roomId, memberId, "suggest-color");
+        if (!room || !sender)
             return;
-        }
-        // 2. Verify sender is in the room
-        const sender = room.members.get(memberId);
-        if (!sender) {
-            logger_1.logger.warn(`[suggest-color] member ${memberId} not found in room ${roomId}`);
-            return;
-        }
         logger_1.logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
         // 3. Broadcast to room - Owner client will listen and display the suggestion
         logger_1.logger.info(`[suggest-color] broadcasting suggestion to room ${roomId}`);
