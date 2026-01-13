@@ -47,8 +47,8 @@ export const joinRoom = (req: Request, res: Response) => {
     const result = roomService.joinRoom(code, name);
 
     if ("error" in result) {
-      // @ts-ignore
-      return res.status(result.status).json({ error: result.error });
+      res.status(result.status).json({ error: result.error });
+      return;
     }
 
     const { room, member } = result;

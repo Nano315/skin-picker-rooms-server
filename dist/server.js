@@ -166,6 +166,31 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("group-apply-combo", { type, color, picks });
         io.to(roomId).emit("room-state", roomService.serializeRoom(room));
     });
+    socket.on("suggest-color", (payload) => {
+        const { roomId, memberId, skinId, chromaId } = payload;
+        logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
+        // 1. Validation basics
+        const room = roomService.getRoom(roomId);
+        if (!room) {
+            logger_1.logger.warn(`[suggest-color] room ${roomId} not found`);
+            return;
+        }
+        // 2. Verify sender is in the room
+        const sender = room.members.get(memberId);
+        if (!sender) {
+            logger_1.logger.warn(`[suggest-color] member ${memberId} not found in room ${roomId}`);
+            return;
+        }
+        logger_1.logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+        // 3. Broadcast to room - Owner client will listen and display the suggestion
+        logger_1.logger.info(`[suggest-color] broadcasting suggestion to room ${roomId}`);
+        io.to(roomId).emit("color-suggestion-received", {
+            memberId,
+            senderName: sender.name,
+            skinId,
+            chromaId
+        });
+    });
 });
 // --- Start ---
 const PORT = Number(process.env.PORT) || 4000;

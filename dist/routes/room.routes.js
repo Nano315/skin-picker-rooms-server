@@ -37,6 +37,7 @@ const express_1 = require("express");
 const RoomController = __importStar(require("../controllers/room.controller"));
 const router = (0, express_1.Router)();
 router.post("/", RoomController.createRoom);
+router.post("/bot", RoomController.createBotRoom);
 router.post("/join", RoomController.joinRoom);
 router.post("/:code/bots", RoomController.addBots);
 exports.default = router;

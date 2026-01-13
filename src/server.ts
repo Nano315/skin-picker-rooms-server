@@ -7,7 +7,16 @@ import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
-import { GroupSkinOption, Member } from "./types";
+import type {
+  GroupSkinOption,
+  Member,
+  JoinRoomPayload,
+  LeaveRoomPayload,
+  UpdateSelectionPayload,
+  OwnedOptionsPayload,
+  RequestGroupRerollPayload,
+  SuggestColorPayload,
+} from "./types";
 import { randomInt } from "crypto";
 
 const app = express();
@@ -65,7 +74,7 @@ function handleMemberLeave(roomId: string, memberId: string, reason: string) {
 io.on("connection", (socket) => {
   logger.info(`[socket] connected ${socket.id}`);
 
-  socket.on("join-room", ({ roomId, memberId }: { roomId: string; memberId: string }) => {
+  socket.on("join-room", ({ roomId, memberId }: JoinRoomPayload) => {
     const room = roomService.getRoom(roomId);
     if (!room) return;
 
@@ -80,7 +89,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   });
 
-  socket.on("update-selection", (payload: any) => {
+  socket.on("update-selection", (payload: UpdateSelectionPayload) => {
     const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
     const room = roomService.getRoom(roomId);
     if (!room) return;
@@ -96,7 +105,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   });
 
-  socket.on("owned-options", (payload: any) => {
+  socket.on("owned-options", (payload: OwnedOptionsPayload) => {
     const { roomId, memberId, championId, championAlias, options } = payload;
     const room = roomService.getRoom(roomId);
     if (!room) return;
@@ -126,7 +135,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   });
 
-  socket.on("leave-room", ({ roomId, memberId }: { roomId: string; memberId: string }) => {
+  socket.on("leave-room", ({ roomId, memberId }: LeaveRoomPayload) => {
     logger.debug(`[socket] ${socket.id} explicit leave room ${roomId}`);
     
     handleMemberLeave(roomId, memberId, "leave");
@@ -145,7 +154,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("request-group-reroll", (payload: any) => {
+  socket.on("request-group-reroll", (payload: RequestGroupRerollPayload) => {
     const { roomId, memberId, type, color } = payload;
     const room = roomService.getRoom(roomId);
     if (!room) return;
@@ -197,32 +206,32 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
   });
 
-  socket.on("suggest-color", (payload: any) => {
-    const { roomId, senderId, skinId, chromaId } = payload;
-    
+  socket.on("suggest-color", (payload: SuggestColorPayload) => {
+    const { roomId, memberId, skinId, chromaId } = payload;
+
+    logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
+
     // 1. Validation basics
     const room = roomService.getRoom(roomId);
-    if (!room) return;
-
-    // 2. Verify sender is in the room
-    const sender = room.members.get(senderId);
-    if (!sender) {
-        logger.warn(`[suggest-color] sender ${senderId} not found in room ${roomId}`);
+    if (!room) {
+        logger.warn(`[suggest-color] room ${roomId} not found`);
         return;
     }
 
-    logger.info(`[suggest-color] from ${sender.name} (${senderId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+    // 2. Verify sender is in the room
+    const sender = room.members.get(memberId);
+    if (!sender) {
+        logger.warn(`[suggest-color] member ${memberId} not found in room ${roomId}`);
+        return;
+    }
 
-    // 3. Find owner socket to send private message (optional) or broadcast to room
-    // The requirement is "Relaye l'information à l'owner".
-    // We can try to find the owner's socket, or just emit to the room with a specific event that clients ignore if they are not the owner.
-    // For simplicity and robustness, existing pattern uses broadcasting room-state. 
-    // We will emit 'color-suggestion-received' to the room, payload containing targetOwnerId? 
-    // Actually, the client (Owner) just needs to know *someone* suggested something.
-    // Let's send to the room. The Owner client will listen and display the toast/notification.
-    
+    logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+
+    // 3. Broadcast to room - Owner client will listen and display the suggestion
+    logger.info(`[suggest-color] broadcasting suggestion to room ${roomId}`);
+
     io.to(roomId).emit("color-suggestion-received", {
-        senderId,
+        memberId,
         senderName: sender.name,
         skinId,
         chromaId

@@ -44,9 +44,5 @@ export type Room = {
   activeColor?: string;
 };
 
-export type SuggestionPayload = {
-  roomId: string;
-  senderId: string;
-  skinId: number;
-  chromaId: number;
-};
+// Re-export socket event types for convenience
+export * from "./socket-events";

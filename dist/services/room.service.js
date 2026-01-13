@@ -46,6 +46,17 @@ class RoomService {
         logger_1.logger.info(`Room created: ${roomId} (Code: ${code}) by ${ownerName}`);
         return { room, member: owner };
     }
+    createBotRoom() {
+        const { room, member } = this.createRoom("Bot Owner");
+        // Customize the bot
+        member.championId = (0, crypto_1.randomInt)(1, 160);
+        member.skinId = (0, crypto_1.randomInt)(26000, 26050); // Just some random range
+        member.chromaId = 0;
+        member.isReady = true;
+        // We could add options if we want to test synergy immediately
+        // For now, simple ready bot
+        return { room, member };
+    }
     getRoom(roomId) {
         return this.rooms.get(roomId);
     }
