@@ -16,3 +16,5 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 Object.defineProperty(exports, "__esModule", { value: true });
 // Re-export socket event types for convenience
 __exportStar(require("./socket-events"), exports);
+// Re-export event version types
+__exportStar(require("./event-versions"), exports);

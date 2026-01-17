@@ -271,36 +271,51 @@ io.on("connection", (socket) => {
     );
   }));
 
-  socket.on("suggest-color", safeHandler<SuggestColorPayload>("suggest-color", (payload) => {
-    const { roomId, memberId, skinId, chromaId } = payload;
+  socket.on("suggest-color", (payload: SuggestColorPayload, ack?: (response: { success: boolean; error?: string }) => void) => {
+    try {
+      const { roomId, memberId, skinId, chromaId } = payload;
 
-    logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
+      logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
 
-    const room = roomService.getRoom(roomId);
-    if (!room) {
-      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+      const room = roomService.getRoom(roomId);
+      if (!room) {
+        logger.warn(`[suggest-color] Room ${roomId} not found`);
+        if (ack) ack({ success: false, error: 'Room not found' });
+        return;
+      }
+
+      const sender = room.members.get(memberId);
+      if (!sender) {
+        logger.warn(`[suggest-color] Member ${memberId} not found in room ${roomId}`);
+        if (ack) ack({ success: false, error: 'Member not found' });
+        return;
+      }
+
+      logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+
+      // Broadcast to room with version-appropriate payload
+      emitVersionedToRoom(io, roomId, "color-suggestion-received", (version) =>
+        createColorSuggestionPayload(
+          {
+            memberId,
+            memberName: sender.name,
+            skinId,
+            chromaId,
+          },
+          version
+        )
+      );
+
+      // Send acknowledgment to sender
+      if (ack) {
+        ack({ success: true });
+        logger.debug(`[suggest-color] Acknowledged suggestion from ${memberId}`);
+      }
+    } catch (err) {
+      logger.error(`[suggest-color] Error processing suggestion`, err);
+      if (ack) ack({ success: false, error: 'Internal server error' });
     }
-
-    const sender = room.members.get(memberId);
-    if (!sender) {
-      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
-    }
-
-    logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
-
-    // Broadcast to room with version-appropriate payload
-    emitVersionedToRoom(io, roomId, "color-suggestion-received", (version) =>
-      createColorSuggestionPayload(
-        {
-          memberId,
-          memberName: sender.name,
-          skinId,
-          chromaId,
-        },
-        version
-      )
-    );
-  }));
+  });
 });
 
 // --- Start ---

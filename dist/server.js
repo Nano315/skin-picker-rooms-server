@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.io = exports.httpServer = void 0;
 const express_1 = __importDefault(require("express"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
@@ -12,6 +13,7 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const logger_1 = require("./utils/logger");
 const socketHelpers_1 = require("./utils/socketHelpers");
 const errors_1 = require("./utils/errors");
+const versionAdapter_1 = require("./utils/versionAdapter");
 const room_routes_1 = __importDefault(require("./routes/room.routes"));
 const room_service_1 = require("./services/room.service");
 const crypto_1 = require("crypto");
@@ -35,8 +37,8 @@ app.get("/", (req, res) => {
     res.send("Skin Picker Rooms server is running");
 });
 // --- Server Setup ---
-const httpServer = http_1.default.createServer(app);
-const io = new socket_io_1.Server(httpServer, {
+exports.httpServer = http_1.default.createServer(app);
+exports.io = new socket_io_1.Server(exports.httpServer, {
     cors: { origin: "*" },
 });
 // --- Socket.io Logic ---
@@ -49,17 +51,21 @@ function handleMemberLeave(roomId, memberId, reason) {
     const result = roomService.removeMember(room, memberId);
     if (result.roomClosed) {
         // Room closed, notify everyone
-        io.to(roomId).emit("room-closed", { reason: result.reason });
+        exports.io.to(roomId).emit("room-closed", { reason: result.reason });
         // Disconnect all sockets in this room
-        io.in(roomId).disconnectSockets(true);
+        exports.io.in(roomId).disconnectSockets(true);
     }
     else {
-        // Room still active, notify state update
-        io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+        // Room still active, notify state update with versioned payload
+        const serializedRoom = roomService.serializeRoom(room);
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }
 }
-io.on("connection", (socket) => {
-    logger_1.logger.info(`[socket] connected ${socket.id}`);
+exports.io.on("connection", (socket) => {
+    // Register client version from handshake query
+    const rawVersion = socket.handshake.query.clientVersion;
+    const clientVersion = (0, versionAdapter_1.registerClientVersion)(socket.id, typeof rawVersion === "string" ? parseInt(rawVersion, 10) || 1 : 1);
+    logger_1.logger.info(`[socket] connected ${socket.id} (v${clientVersion})`);
     const safeHandler = (0, socketHelpers_1.createSafeHandler)(socket);
     socket.on("join-room", safeHandler("join-room", ({ roomId, memberId }) => {
         const room = roomService.getRoom(roomId);
@@ -73,7 +79,9 @@ io.on("connection", (socket) => {
         logger_1.logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
         socket.join(roomId);
         socketToMember.set(socket.id, { roomId, memberId });
-        io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+        // Emit versioned room-state
+        const serializedRoom = roomService.serializeRoom(room);
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("update-selection", safeHandler("update-selection", (payload) => {
         const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
@@ -89,7 +97,9 @@ io.on("connection", (socket) => {
         member.championAlias = championAlias ?? "";
         member.skinId = skinId;
         member.chromaId = chromaId;
-        io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+        // Emit versioned room-state
+        const serializedRoom = roomService.serializeRoom(room);
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("owned-options", safeHandler("owned-options", (payload) => {
         const { roomId, memberId, championId, championAlias, options } = payload;
@@ -116,7 +126,9 @@ io.on("connection", (socket) => {
         }
         logger_1.logger.debug(`[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`);
         roomService.recomputeSynergy(room);
-        io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+        // Emit versioned room-state
+        const serializedRoom = roomService.serializeRoom(room);
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("leave-room", safeHandler("leave-room", ({ roomId, memberId }) => {
         logger_1.logger.debug(`[leave-room] ${socket.id} explicit leave room ${roomId}`);
@@ -127,6 +139,7 @@ io.on("connection", (socket) => {
     socket.on("disconnect", () => {
         const info = socketToMember.get(socket.id);
         socketToMember.delete(socket.id);
+        (0, versionAdapter_1.removeClientVersion)(socket.id);
         if (info) {
             logger_1.logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
             handleMemberLeave(info.roomId, info.memberId, "disconnect");
@@ -177,32 +190,56 @@ io.on("connection", (socket) => {
         if (type === "sameColor") {
             room.activeColor = color;
         }
-        io.to(roomId).emit("group-apply-combo", { type, color, picks });
-        io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+        // Emit versioned group-apply-combo
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "group-apply-combo", (version) => (0, versionAdapter_1.createGroupApplyComboPayload)({ type, color, picks }, version));
+        // Emit versioned room-state
+        const serializedRoom = roomService.serializeRoom(room);
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
-    socket.on("suggest-color", safeHandler("suggest-color", (payload) => {
-        const { roomId, memberId, skinId, chromaId } = payload;
-        logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
-        const room = roomService.getRoom(roomId);
-        if (!room) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    socket.on("suggest-color", (payload, ack) => {
+        try {
+            const { roomId, memberId, skinId, chromaId } = payload;
+            logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
+            const room = roomService.getRoom(roomId);
+            if (!room) {
+                logger_1.logger.warn(`[suggest-color] Room ${roomId} not found`);
+                if (ack)
+                    ack({ success: false, error: 'Room not found' });
+                return;
+            }
+            const sender = room.members.get(memberId);
+            if (!sender) {
+                logger_1.logger.warn(`[suggest-color] Member ${memberId} not found in room ${roomId}`);
+                if (ack)
+                    ack({ success: false, error: 'Member not found' });
+                return;
+            }
+            logger_1.logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
+            // Broadcast to room with version-appropriate payload
+            (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "color-suggestion-received", (version) => (0, versionAdapter_1.createColorSuggestionPayload)({
+                memberId,
+                memberName: sender.name,
+                skinId,
+                chromaId,
+            }, version));
+            // Send acknowledgment to sender
+            if (ack) {
+                ack({ success: true });
+                logger_1.logger.debug(`[suggest-color] Acknowledged suggestion from ${memberId}`);
+            }
         }
-        const sender = room.members.get(memberId);
-        if (!sender) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+        catch (err) {
+            logger_1.logger.error(`[suggest-color] Error processing suggestion`, err);
+            if (ack)
+                ack({ success: false, error: 'Internal server error' });
         }
-        logger_1.logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
-        // Broadcast to room - Owner client will listen and display the suggestion
-        io.to(roomId).emit("color-suggestion-received", {
-            memberId,
-            senderName: sender.name,
-            skinId,
-            chromaId,
-        });
-    }));
+    });
 });
 // --- Start ---
-const PORT = Number(process.env.PORT) || 4000;
-httpServer.listen(PORT, "0.0.0.0", () => {
-    logger_1.logger.info(`Rooms server listening on port ${PORT}`);
-});
+// Only start the server if this module is run directly (not imported for tests)
+if (process.env.NODE_ENV !== "test") {
+    const PORT = Number(process.env.PORT) || 4000;
+    exports.httpServer.listen(PORT, "0.0.0.0", () => {
+        logger_1.logger.info(`Rooms server listening on port ${PORT}`);
+    });
+}

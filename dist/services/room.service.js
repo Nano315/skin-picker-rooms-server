@@ -109,52 +109,46 @@ class RoomService {
     }
     recomputeSynergy(room) {
         const allMembers = Array.from(room.members.values());
-        // Filter members who are ready and have options (valid lock)
+        // For synergy purposes, we only care about members who have submitted options.
         const readyMembers = allMembers.filter((m) => m.options && m.options.length > 0);
-        // Limit logging to avoid spam
-        // logger.debug(`Recomputing synergy for room ${room.code} (${readyMembers.length} ready)`);
-        if (readyMembers.length < 1) {
+        if (readyMembers.length < 2) { // Cannot have a synergy with less than 2 people.
             room.synergy = { colors: [] };
             return;
         }
         const allColors = new Set();
         for (const m of readyMembers) {
-            if (!m.options)
-                continue;
             for (const opt of m.options) {
-                if (!opt.auraColor)
-                    continue;
-                allColors.add(opt.auraColor);
+                if (opt.auraColor) {
+                    allColors.add(opt.auraColor);
+                }
             }
         }
-        const colors = [];
+        const synergies = [];
         for (const color of allColors) {
             const participants = [];
-            let comboCount = 1;
-            for (const m of readyMembers) {
-                const opts = (m.options ?? []).filter((o) => o.auraColor === color);
-                if (!opts.length) {
-                    comboCount = 0;
-                    break;
+            let combinationCount = 1;
+            for (const member of readyMembers) {
+                const memberOptionsWithColor = (member.options ?? []).filter((o) => o.auraColor === color);
+                if (memberOptionsWithColor.length > 0) {
+                    participants.push(member.id);
+                    combinationCount *= memberOptionsWithColor.length;
                 }
-                participants.push(m.id);
-                comboCount *= opts.length;
             }
-            if (comboCount > 0) {
-                colors.push({
+            if (participants.length > 1) {
+                synergies.push({
                     type: "sameColor",
                     color,
                     members: participants,
-                    coverage: 1, // 100% of ready members
-                    combinationCount: comboCount,
+                    coverage: participants.length / allMembers.length,
+                    combinationCount,
                 });
             }
         }
-        colors.sort((a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount);
-        room.synergy = { colors };
-        if (colors.length > 0) {
+        synergies.sort((a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount);
+        room.synergy = { colors: synergies };
+        if (synergies.length > 0) {
             // Only log "interesting" events to keep logs clean
-            logger_1.logger.debug(`[Synergy] Room ${room.code}: Found ${colors.length} synergies (Best: ${colors[0].color})`);
+            logger_1.logger.debug(`[Synergy] Room ${room.code}: Found ${synergies.length} synergies (Best: ${synergies[0].color})`);
         }
     }
     serializeRoom(room) {
