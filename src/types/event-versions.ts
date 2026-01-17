@@ -1,0 +1,168 @@
+/**
+ * Socket.io Event Versioning Types
+ *
+ * Version History:
+ * - v1 (legacy): Original format, no version field
+ * - v2 (current): Added version field, standardized naming
+ *
+ * Breaking Changes v1 → v2:
+ * - All versioned events now include `version: 2` field
+ * - color-suggestion-received: field names standardized (senderName → memberName for clarity)
+ * - room-state: added version field
+ * - group-apply-combo: added version field
+ */
+
+// Current version - clients should declare this or higher
+export const CURRENT_EVENT_VERSION = 2;
+
+// Minimum supported version (for backwards compat)
+export const MIN_SUPPORTED_VERSION = 1;
+
+// ============================================
+// Base Versioned Payload
+// ============================================
+
+export interface VersionedPayload {
+  version: number;
+}
+
+// ============================================
+// color-suggestion-received Event Versions
+// ============================================
+
+/**
+ * V1 (legacy) - No version field
+ * Used by clients that don't send clientVersion
+ */
+export interface ColorSuggestionV1 {
+  memberId: string;
+  senderName: string;
+  skinId: number;
+  chromaId: number;
+}
+
+/**
+ * V2 (current) - With version field and standardized naming
+ */
+export interface ColorSuggestionV2 extends VersionedPayload {
+  version: 2;
+  memberId: string;
+  memberName: string; // Renamed from senderName for clarity
+  skinId: number;
+  chromaId: number;
+}
+
+export type ColorSuggestionPayload = ColorSuggestionV1 | ColorSuggestionV2;
+
+// ============================================
+// room-state Event Versions
+// ============================================
+
+export interface RoomMember {
+  id: string;
+  name: string;
+  championId: number;
+  championAlias: string;
+  skinId: number;
+  chromaId: number;
+  isReady?: boolean;
+}
+
+export interface SynergyInfo {
+  colors: Array<{
+    type: "sameColor";
+    color: string;
+    members: string[];
+    coverage: number;
+    combinationCount: number;
+  }>;
+}
+
+/**
+ * V1 (legacy) - No version field
+ */
+export interface RoomStateV1 {
+  id: string;
+  code: string;
+  ownerId: string;
+  members: RoomMember[];
+  synergy?: SynergyInfo;
+  activeSynergy?: {
+    type: string;
+    color: string;
+    timestamp: number;
+  };
+  activeColor?: string;
+}
+
+/**
+ * V2 (current) - With version field
+ */
+export interface RoomStateV2 extends VersionedPayload {
+  version: 2;
+  id: string;
+  code: string;
+  ownerId: string;
+  members: RoomMember[];
+  synergy?: SynergyInfo;
+  activeSynergy?: {
+    type: string;
+    color: string;
+    timestamp: number;
+  };
+  activeColor?: string;
+}
+
+export type VersionedRoomStatePayload = RoomStateV1 | RoomStateV2;
+
+// ============================================
+// group-apply-combo Event Versions
+// ============================================
+
+export interface ComboPick {
+  memberId: string;
+  skinId: number;
+  chromaId: number;
+}
+
+/**
+ * V1 (legacy) - No version field
+ */
+export interface GroupApplyComboV1 {
+  type: "sameColor";
+  color: string;
+  picks: ComboPick[];
+}
+
+/**
+ * V2 (current) - With version field
+ */
+export interface GroupApplyComboV2 extends VersionedPayload {
+  version: 2;
+  type: "sameColor";
+  color: string;
+  picks: ComboPick[];
+}
+
+export type VersionedGroupApplyComboPayload = GroupApplyComboV1 | GroupApplyComboV2;
+
+// ============================================
+// room-closed Event (no versioning needed - simple payload)
+// ============================================
+
+// Note: RoomClosedPayload is defined in socket-events.ts, not versioned here
+
+// ============================================
+// Helper Types
+// ============================================
+
+export type EventVersion = 1 | 2;
+
+export function isV2Payload(payload: unknown): payload is VersionedPayload {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "version" in payload &&
+    (payload as VersionedPayload).version >= 2
+  );
+}

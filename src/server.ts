@@ -7,6 +7,16 @@ import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
 import { createSafeHandler } from "./utils/socketHelpers";
 import { AppError, ErrorCodes } from "./utils/errors";
+import {
+  registerClientVersion,
+  getClientVersion,
+  removeClientVersion,
+  createColorSuggestionPayload,
+  createRoomStatePayload,
+  createGroupApplyComboPayload,
+  emitVersionedToRoom,
+} from "./utils/versionAdapter";
+import { CURRENT_EVENT_VERSION } from "./types";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
 import type {
@@ -59,20 +69,30 @@ function handleMemberLeave(roomId: string, memberId: string, reason: string) {
   if (!room) return;
 
   const result = roomService.removeMember(room, memberId);
-  
+
   if (result.roomClosed) {
-     // Room closed, notify everyone
-     io.to(roomId).emit("room-closed", { reason: result.reason });
-     // Disconnect all sockets in this room
-     io.in(roomId).disconnectSockets(true);
+    // Room closed, notify everyone
+    io.to(roomId).emit("room-closed", { reason: result.reason });
+    // Disconnect all sockets in this room
+    io.in(roomId).disconnectSockets(true);
   } else {
-     // Room still active, notify state update
-     io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+    // Room still active, notify state update with versioned payload
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
   }
 }
 
 io.on("connection", (socket) => {
-  logger.info(`[socket] connected ${socket.id}`);
+  // Register client version from handshake query
+  const rawVersion = socket.handshake.query.clientVersion;
+  const clientVersion = registerClientVersion(
+    socket.id,
+    typeof rawVersion === "string" ? parseInt(rawVersion, 10) || 1 : 1
+  );
+  logger.info(`[socket] connected ${socket.id} (v${clientVersion})`);
+
   const safeHandler = createSafeHandler(socket);
 
   socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId }) => {
@@ -91,7 +111,11 @@ io.on("connection", (socket) => {
     socket.join(roomId);
     socketToMember.set(socket.id, { roomId, memberId });
 
-    io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+    // Emit versioned room-state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
   }));
 
   socket.on("update-selection", safeHandler<UpdateSelectionPayload>("update-selection", (payload) => {
@@ -112,7 +136,11 @@ io.on("connection", (socket) => {
     member.skinId = skinId;
     member.chromaId = chromaId;
 
-    io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+    // Emit versioned room-state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
   }));
 
   socket.on("owned-options", safeHandler<OwnedOptionsPayload>("owned-options", (payload) => {
@@ -147,7 +175,11 @@ io.on("connection", (socket) => {
 
     roomService.recomputeSynergy(room);
 
-    io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+    // Emit versioned room-state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
   }));
 
   socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId }) => {
@@ -162,6 +194,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     const info = socketToMember.get(socket.id);
     socketToMember.delete(socket.id);
+    removeClientVersion(socket.id);
 
     if (info) {
       logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
@@ -226,8 +259,16 @@ io.on("connection", (socket) => {
       room.activeColor = color;
     }
 
-    io.to(roomId).emit("group-apply-combo", { type, color, picks });
-    io.to(roomId).emit("room-state", roomService.serializeRoom(room));
+    // Emit versioned group-apply-combo
+    emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
+      createGroupApplyComboPayload({ type, color, picks }, version)
+    );
+
+    // Emit versioned room-state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
   }));
 
   socket.on("suggest-color", safeHandler<SuggestColorPayload>("suggest-color", (payload) => {
@@ -247,13 +288,18 @@ io.on("connection", (socket) => {
 
     logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
 
-    // Broadcast to room - Owner client will listen and display the suggestion
-    io.to(roomId).emit("color-suggestion-received", {
-      memberId,
-      senderName: sender.name,
-      skinId,
-      chromaId,
-    });
+    // Broadcast to room with version-appropriate payload
+    emitVersionedToRoom(io, roomId, "color-suggestion-received", (version) =>
+      createColorSuggestionPayload(
+        {
+          memberId,
+          memberName: sender.name,
+          skinId,
+          chromaId,
+        },
+        version
+      )
+    );
   }));
 });
 

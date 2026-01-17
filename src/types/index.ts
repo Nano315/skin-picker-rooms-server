@@ -46,3 +46,6 @@ export type Room = {
 
 // Re-export socket event types for convenience
 export * from "./socket-events";
+
+// Re-export event version types
+export * from "./event-versions";
