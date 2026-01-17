@@ -1,6 +1,6 @@
 import express from "express";
 import http from "http";
-import { Server } from "socket.io";
+import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -44,8 +44,8 @@ app.get("/", (req, res) => {
 });
 
 // --- Server Setup ---
-const httpServer = http.createServer(app);
-const io = new Server(httpServer, {
+export const httpServer = http.createServer(app);
+export const io = new SocketIOServer(httpServer, {
   cors: { origin: "*" },
 });
 
@@ -258,7 +258,10 @@ io.on("connection", (socket) => {
 });
 
 // --- Start ---
-const PORT = Number(process.env.PORT) || 4000;
-httpServer.listen(PORT, "0.0.0.0", () => {
-  logger.info(`Rooms server listening on port ${PORT}`);
-});
+// Only start the server if this module is run directly (not imported for tests)
+if (process.env.NODE_ENV !== "test") {
+  const PORT = Number(process.env.PORT) || 4000;
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    logger.info(`Rooms server listening on port ${PORT}`);
+  });
+}
