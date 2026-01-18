@@ -203,7 +203,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload) => {
-    const { roomId, memberId, type, color } = payload;
+    const { roomId, memberId, type, color, sourceMemberId } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
@@ -261,7 +261,7 @@ io.on("connection", (socket) => {
 
     // Emit versioned group-apply-combo
     emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
-      createGroupApplyComboPayload({ type, color, picks }, version)
+      createGroupApplyComboPayload({ type, color, picks, sourceMemberId }, version)
     );
 
     // Emit versioned room-state

@@ -123,6 +123,7 @@ interface GroupApplyComboData {
   type: "sameColor";
   color: string;
   picks: ComboPick[];
+  sourceMemberId?: string;
 }
 
 export function createGroupApplyComboPayload(

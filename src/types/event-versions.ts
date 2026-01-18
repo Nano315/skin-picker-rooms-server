@@ -132,6 +132,7 @@ export interface GroupApplyComboV1 {
   type: "sameColor";
   color: string;
   picks: ComboPick[];
+  sourceMemberId?: string;
 }
 
 /**
@@ -142,6 +143,7 @@ export interface GroupApplyComboV2 extends VersionedPayload {
   type: "sameColor";
   color: string;
   picks: ComboPick[];
+  sourceMemberId?: string;
 }
 
 export type VersionedGroupApplyComboPayload = GroupApplyComboV1 | GroupApplyComboV2;
