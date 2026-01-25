@@ -175,6 +175,22 @@ io.on("connection", (socket) => {
 
     roomService.recomputeSynergy(room);
 
+    // Check if we should auto-apply a color (all members have champions and options)
+    if (roomService.shouldAutoApply(room)) {
+      const result = roomService.generateAutoApplyPicks(room);
+      if (result) {
+        // Emit auto-apply combo
+        emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
+          createGroupApplyComboPayload({
+            type: "sameColor",
+            color: result.color,
+            picks: result.picks,
+            autoApplied: true,
+          }, version)
+        );
+      }
+    }
+
     // Emit versioned room-state
     const serializedRoom = roomService.serializeRoom(room);
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
@@ -259,9 +275,12 @@ io.on("connection", (socket) => {
       room.activeColor = color;
     }
 
+    // Add to history
+    roomService.addToHistory(room, color, picks);
+
     // Emit versioned group-apply-combo
     emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
-      createGroupApplyComboPayload({ type, color, picks, sourceMemberId }, version)
+      createGroupApplyComboPayload({ type, color, picks, sourceMemberId, autoApplied: false }, version)
     );
 
     // Emit versioned room-state

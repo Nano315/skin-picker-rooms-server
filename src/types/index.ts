@@ -4,6 +4,12 @@ export type GroupSkinOption = {
   auraColor: string | null; // e.g. "#6248FF"
 };
 
+export type ChromaCombination = {
+  color: string;
+  members: Array<{ memberId: string; skinId: number; chromaId: number }>;
+  timestamp: number;
+};
+
 export type Member = {
   id: string;
   name: string;
@@ -42,6 +48,8 @@ export type Room = {
     timestamp: number;
   };
   activeColor?: string;
+  // Group history - stores recent color combinations to avoid repetition
+  history: ChromaCombination[];
 };
 
 // Re-export socket event types for convenience

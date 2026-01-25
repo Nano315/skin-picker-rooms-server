@@ -124,6 +124,7 @@ interface GroupApplyComboData {
   color: string;
   picks: ComboPick[];
   sourceMemberId?: string;
+  autoApplied?: boolean;
 }
 
 export function createGroupApplyComboPayload(

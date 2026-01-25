@@ -1,6 +1,8 @@
 import { randomUUID, randomInt } from "crypto";
-import { Room, Member, ColorSynergy } from "../types";
+import { Room, Member, ColorSynergy, ChromaCombination } from "../types";
 import { logger } from "../utils/logger";
+
+const GROUP_HISTORY_LIMIT = 3;
 
 export class RoomService {
   private static instance: RoomService;
@@ -45,6 +47,7 @@ export class RoomService {
       code,
       ownerId,
       members: new Map([[ownerId, owner]]),
+      history: [],
     };
 
     this.rooms.set(roomId, room);
@@ -183,11 +186,135 @@ export class RoomService {
     );
 
     room.synergy = { colors: synergies };
-    
+
     if (synergies.length > 0) {
         // Only log "interesting" events to keep logs clean
         logger.debug(`[Synergy] Room ${room.code}: Found ${synergies.length} synergies (Best: ${synergies[0].color})`);
     }
+  }
+
+  /**
+   * Get available synergies filtering out recently used colors
+   */
+  public getAvailableSynergies(room: Room): ColorSynergy[] {
+    if (!room.synergy || room.synergy.colors.length === 0) {
+      return [];
+    }
+
+    const recentColors = room.history.map((h) => h.color);
+    const filtered = room.synergy.colors.filter(
+      (s) => !recentColors.includes(s.color)
+    );
+
+    // Fallback: if all synergies are in history, return all synergies
+    return filtered.length > 0 ? filtered : room.synergy.colors;
+  }
+
+  /**
+   * Add a color combination to room history
+   */
+  public addToHistory(
+    room: Room,
+    color: string,
+    picks: Array<{ memberId: string; skinId: number; chromaId: number }>
+  ): void {
+    const combination: ChromaCombination = {
+      color,
+      members: picks,
+      timestamp: Date.now(),
+    };
+
+    room.history.push(combination);
+
+    // Keep only the last N combinations (FIFO)
+    while (room.history.length > GROUP_HISTORY_LIMIT) {
+      room.history.shift();
+    }
+
+    logger.debug(
+      `[History] Room ${room.code}: Added color ${color} to history (${room.history.length}/${GROUP_HISTORY_LIMIT})`
+    );
+  }
+
+  /**
+   * Check if all members have picked a champion and return true if auto-apply should trigger
+   */
+  public shouldAutoApply(room: Room): boolean {
+    const allMembers = Array.from(room.members.values());
+
+    // Need at least 2 members
+    if (allMembers.length < 2) return false;
+
+    // All members must have a champion selected (championId > 0)
+    const allHaveChampion = allMembers.every((m) => m.championId > 0);
+    if (!allHaveChampion) return false;
+
+    // All members must have options
+    const allHaveOptions = allMembers.every((m) => m.options && m.options.length > 0);
+    if (!allHaveOptions) return false;
+
+    // Must have at least one synergy available
+    const availableSynergies = this.getAvailableSynergies(room);
+    if (availableSynergies.length === 0) return false;
+
+    // Don't auto-apply if already applied recently (within last 5 seconds)
+    if (room.activeSynergy && Date.now() - room.activeSynergy.timestamp < 5000) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Select a random color from available synergies and generate picks
+   */
+  public generateAutoApplyPicks(
+    room: Room
+  ): { color: string; picks: Array<{ memberId: string; skinId: number; chromaId: number }> } | null {
+    const availableSynergies = this.getAvailableSynergies(room);
+    if (availableSynergies.length === 0) return null;
+
+    // Pick a random synergy (weighted by coverage could be an option, but random is fine)
+    const idx = randomInt(0, availableSynergies.length);
+    const synergy = availableSynergies[idx];
+    const color = synergy.color;
+
+    const picks: Array<{ memberId: string; skinId: number; chromaId: number }> = [];
+
+    for (const m of room.members.values()) {
+      if (!m.options || m.options.length === 0) {
+        // Keep current selection
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
+
+      const opts = m.options.filter((o) => o.auraColor === color);
+      if (opts.length === 0) {
+        // No matching color, keep current
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
+
+      const optIdx = randomInt(0, opts.length);
+      const opt = opts[optIdx];
+
+      // Update member's current selection
+      m.skinId = opt.skinId;
+      m.chromaId = opt.chromaId;
+
+      picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
+    }
+
+    // Add to history
+    this.addToHistory(room, color, picks);
+
+    // Update room state
+    room.activeSynergy = { type: "sameColor", color, timestamp: Date.now() };
+    room.activeColor = color;
+
+    logger.info(`[AutoApply] Room ${room.code}: Auto-applied color ${color}`);
+
+    return { color, picks };
   }
 
   public serializeRoom(room: Room) {

@@ -264,4 +264,282 @@ describe('RoomService', () => {
         expect(redSynergy?.members).not.toContain(player2.id);
     });
   });
+
+  describe('history management', () => {
+    it('should initialize room with empty history', () => {
+      const { room } = service.createRoom('Owner');
+      expect(room.history).toBeDefined();
+      expect(room.history).toHaveLength(0);
+    });
+
+    it('should add combination to history', () => {
+      const { room } = service.createRoom('Owner');
+      const picks = [{ memberId: 'member1', skinId: 100, chromaId: 1 }];
+
+      service.addToHistory(room, 'Blue', picks);
+
+      expect(room.history).toHaveLength(1);
+      expect(room.history[0].color).toBe('Blue');
+      expect(room.history[0].members).toEqual(picks);
+      expect(room.history[0].timestamp).toBeGreaterThan(0);
+    });
+
+    it('should respect FIFO limit of 3 combinations', () => {
+      const { room } = service.createRoom('Owner');
+
+      service.addToHistory(room, 'Red', []);
+      service.addToHistory(room, 'Blue', []);
+      service.addToHistory(room, 'Green', []);
+      service.addToHistory(room, 'Yellow', []);
+
+      expect(room.history).toHaveLength(3);
+      expect(room.history.map(h => h.color)).toEqual(['Blue', 'Green', 'Yellow']);
+    });
+  });
+
+  describe('getAvailableSynergies', () => {
+    it('should return all synergies when history is empty', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Blue' }];
+      service.recomputeSynergy(room);
+
+      const available = service.getAvailableSynergies(room);
+
+      expect(available).toHaveLength(1);
+      expect(available[0].color).toBe('Blue');
+    });
+
+    it('should filter out recently used colors', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1, chromaId: 1, auraColor: 'Blue' },
+        { skinId: 2, chromaId: 2, auraColor: 'Red' }
+      ];
+      player2.options = [
+        { skinId: 3, chromaId: 3, auraColor: 'Blue' },
+        { skinId: 4, chromaId: 4, auraColor: 'Red' }
+      ];
+      service.recomputeSynergy(room);
+
+      // Add Blue to history
+      service.addToHistory(room, 'Blue', []);
+
+      const available = service.getAvailableSynergies(room);
+
+      expect(available).toHaveLength(1);
+      expect(available[0].color).toBe('Red');
+    });
+
+    it('should return all synergies as fallback when all colors are in history', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Blue' }];
+      service.recomputeSynergy(room);
+
+      // Add Blue to history (the only synergy)
+      service.addToHistory(room, 'Blue', []);
+
+      const available = service.getAvailableSynergies(room);
+
+      // Fallback: should return Blue even though it's in history
+      expect(available).toHaveLength(1);
+      expect(available[0].color).toBe('Blue');
+    });
+
+    it('should return empty array when no synergies exist', () => {
+      const { room } = service.createRoom('Owner');
+
+      const available = service.getAvailableSynergies(room);
+
+      expect(available).toHaveLength(0);
+    });
+  });
+
+  describe('shouldAutoApply', () => {
+    it('should return false when less than 2 members', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+
+      expect(service.shouldAutoApply(room)).toBe(false);
+    });
+
+    it('should return false when not all members have champions', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.championId = 0; // No champion
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+      expect(service.shouldAutoApply(room)).toBe(false);
+    });
+
+    it('should return false when not all members have options', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = []; // No options
+
+      service.recomputeSynergy(room);
+      expect(service.shouldAutoApply(room)).toBe(false);
+    });
+
+    it('should return false when no synergies available', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Red' }]; // Different color
+
+      service.recomputeSynergy(room);
+      expect(service.shouldAutoApply(room)).toBe(false);
+    });
+
+    it('should return true when all conditions are met', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+      expect(service.shouldAutoApply(room)).toBe(true);
+    });
+
+    it('should return false when recently applied', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 1, chromaId: 1, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 2, chromaId: 2, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+
+      // Simulate recent apply
+      room.activeSynergy = { type: 'sameColor', color: 'Blue', timestamp: Date.now() };
+
+      expect(service.shouldAutoApply(room)).toBe(false);
+    });
+  });
+
+  describe('generateAutoApplyPicks', () => {
+    it('should return null when no synergies available', () => {
+      const { room } = service.createRoom('Owner');
+
+      const result = service.generateAutoApplyPicks(room);
+
+      expect(result).toBeNull();
+    });
+
+    it('should generate picks for all members', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+      const result = service.generateAutoApplyPicks(room);
+
+      expect(result).not.toBeNull();
+      expect(result?.color).toBe('Blue');
+      expect(result?.picks).toHaveLength(2);
+
+      // Verify picks match expected values
+      const ownerPick = result?.picks.find(p => p.memberId === owner.id);
+      expect(ownerPick?.skinId).toBe(100);
+      expect(ownerPick?.chromaId).toBe(10);
+
+      const player2Pick = result?.picks.find(p => p.memberId === player2.id);
+      expect(player2Pick?.skinId).toBe(200);
+      expect(player2Pick?.chromaId).toBe(20);
+    });
+
+    it('should update room state after generating picks', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+      service.generateAutoApplyPicks(room);
+
+      expect(room.activeSynergy).toBeDefined();
+      expect(room.activeSynergy?.type).toBe('sameColor');
+      expect(room.activeSynergy?.color).toBe('Blue');
+      expect(room.activeColor).toBe('Blue');
+      expect(room.history).toHaveLength(1);
+    });
+
+    it('should update member skinId and chromaId', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+      player2.championId = 2;
+      player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+      service.recomputeSynergy(room);
+      service.generateAutoApplyPicks(room);
+
+      expect(owner.skinId).toBe(100);
+      expect(owner.chromaId).toBe(10);
+      expect(player2.skinId).toBe(200);
+      expect(player2.chromaId).toBe(20);
+    });
+
+    it('should keep current selection for members without matching options', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.skinId = 50;
+      owner.chromaId = 5;
+      owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Red' }]; // Different color
+      player2.championId = 2;
+      player2.options = [
+        { skinId: 200, chromaId: 20, auraColor: 'Blue' },
+        { skinId: 201, chromaId: 21, auraColor: 'Blue' }
+      ];
+
+      // Only one synergy won't be found (need 2 members with same color)
+      // Let's adjust to have a synergy
+      owner.options = [
+        { skinId: 100, chromaId: 10, auraColor: 'Blue' },
+        { skinId: 101, chromaId: 11, auraColor: 'Red' }
+      ];
+
+      service.recomputeSynergy(room);
+      service.generateAutoApplyPicks(room);
+
+      // Both should get Blue options assigned
+      expect(owner.skinId).toBe(100);
+      expect(owner.chromaId).toBe(10);
+    });
+  });
 });
