@@ -35,6 +35,31 @@ export type FriendOfflinePayload = {
   puuid: string;
 };
 
+// --- Room Invitation Types (Story 4.5) ---
+
+// Payload for 'send-room-invite' event (C->S)
+export type SendRoomInvitePayload = {
+  targetPuuid: string;
+  roomCode: string;
+};
+
+// Payload for 'room-invite-received' event (S->C)
+export type RoomInviteReceivedPayload = {
+  fromPuuid: string;
+  fromName: string;
+  roomCode: string;
+};
+
+// Payload for 'invite-sent' event (S->C)
+export type InviteSentPayload = {
+  targetPuuid: string;
+};
+
+// Payload for 'invite-failed' event (S->C)
+export type InviteFailedPayload = {
+  reason: "not_identified" | "not_friend" | "rate_limited" | "friend_offline";
+};
+
 export type ChromaCombination = {
   color: string;
   members: Array<{ memberId: string; skinId: number; chromaId: number }>;

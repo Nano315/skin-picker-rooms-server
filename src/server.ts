@@ -27,6 +27,8 @@ import type {
   OwnedOptionsPayload,
   RequestGroupRerollPayload,
   SuggestColorPayload,
+  IdentifyPayload,
+  SendRoomInvitePayload,
 } from "./types";
 import { randomInt } from "crypto";
 
@@ -64,6 +66,22 @@ export const io = new SocketIOServer(httpServer, {
 
 // Map socketId -> { roomId, memberId }
 const socketToMember = new Map<string, { roomId: string; memberId: string }>();
+
+// Rate limiting for room invitations (Story 4.5)
+// Key: `${senderPuuid}:${targetPuuid}` -> timestamp of last invite
+const inviteRateLimits = new Map<string, number>();
+const INVITE_RATE_LIMIT_MS = 30000; // 30 seconds
+const INVITE_CLEANUP_INTERVAL_MS = 300000; // 5 minutes
+
+// Cleanup expired rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, timestamp] of inviteRateLimits.entries()) {
+    if (now - timestamp > INVITE_CLEANUP_INTERVAL_MS) {
+      inviteRateLimits.delete(key);
+    }
+  }
+}, INVITE_CLEANUP_INTERVAL_MS);
 
 function handleMemberLeave(roomId: string, memberId: string, reason: string) {
   const room = roomService.getRoom(roomId);
@@ -219,11 +237,24 @@ io.on("connection", (socket) => {
       handleMemberLeave(info.roomId, info.memberId, "disconnect");
     }
 
-    // Handle presence cleanup (Story 4.2)
-    const puuid = presenceManager.disconnect(socket.id);
+    // Handle presence cleanup and friend notifications (Story 4.3)
+    const puuid = presenceManager.getPuuidBySocketId(socket.id);
     if (puuid) {
-      logger.debug(`[presence] User ${puuid} presence cleared`);
-      // Note: friend-offline notifications will be implemented in Story 4.3
+      const friends = presenceManager.getFriends(puuid);
+      const summonerName = presenceManager.getSummonerName(puuid);
+
+      // Notify online friends that this user is offline
+      if (friends) {
+        for (const friendPuuid of friends) {
+          if (presenceManager.isOnline(friendPuuid)) {
+            io.to(`user:${friendPuuid}`).emit("friend-offline", { puuid });
+          }
+        }
+      }
+
+      // Clear presence after notifications
+      presenceManager.disconnect(socket.id);
+      logger.info(`[identify] ${summonerName} (${puuid}) disconnected`);
     }
   });
 
@@ -342,6 +373,107 @@ io.on("connection", (socket) => {
     } catch (err) {
       logger.error(`[suggest-color] Error processing suggestion`, err);
       if (ack) ack({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  // --- Identity Handshake (Story 4.3) ---
+  socket.on("identify", (payload: IdentifyPayload) => {
+    try {
+      const { puuid, summonerName, friends } = payload;
+
+      // Validate payload
+      if (!puuid || typeof puuid !== "string" || puuid.length < 10) {
+        logger.warn("[identify] Invalid puuid received", { puuid });
+        return;
+      }
+      if (!summonerName || typeof summonerName !== "string") {
+        logger.warn("[identify] Invalid summonerName received", { summonerName });
+        return;
+      }
+      if (!Array.isArray(friends)) {
+        logger.warn("[identify] Invalid friends array received");
+        return;
+      }
+
+      // 1. Register presence
+      presenceManager.identify(socket, puuid, summonerName);
+
+      // 2. Store friends list
+      presenceManager.setFriends(puuid, friends);
+
+      // 3. Find online friends
+      const onlineFriends = presenceManager.getOnlineFriends(friends);
+
+      // 4. Confirm to client
+      socket.emit("identity-confirmed", { onlineFriends });
+
+      // 5. Notify friends that this user is online
+      for (const friendPuuid of friends) {
+        if (presenceManager.isOnline(friendPuuid)) {
+          io.to(`user:${friendPuuid}`).emit("friend-online", { puuid, summonerName });
+        }
+      }
+
+      logger.info(`[identify] ${summonerName} (${puuid}) identified with ${friends.length} friends, ${onlineFriends.length} online`);
+    } catch (err) {
+      logger.error("[identify] Error processing identify", err);
+    }
+  });
+
+  // --- Room Invitations (Story 4.5) ---
+  socket.on("send-room-invite", (payload: SendRoomInvitePayload) => {
+    try {
+      const { targetPuuid, roomCode } = payload;
+
+      // 1. Verify sender is identified
+      const senderPuuid = presenceManager.getPuuidBySocketId(socket.id);
+      if (!senderPuuid) {
+        socket.emit("invite-failed", { reason: "not_identified" });
+        logger.warn("[invite] Unidentified user tried to send invite");
+        return;
+      }
+
+      // 2. Verify target is a friend of sender (security)
+      const senderFriends = presenceManager.getFriends(senderPuuid);
+      if (!senderFriends || !senderFriends.includes(targetPuuid)) {
+        socket.emit("invite-failed", { reason: "not_friend" });
+        logger.warn(`[invite] ${senderPuuid} tried to invite non-friend ${targetPuuid}`);
+        return;
+      }
+
+      // 3. Check rate limit
+      const rateLimitKey = `${senderPuuid}:${targetPuuid}`;
+      const lastInvite = inviteRateLimits.get(rateLimitKey);
+      if (lastInvite && Date.now() - lastInvite < INVITE_RATE_LIMIT_MS) {
+        socket.emit("invite-failed", { reason: "rate_limited" });
+        logger.debug(`[invite] Rate limited: ${senderPuuid} -> ${targetPuuid}`);
+        return;
+      }
+
+      // 4. Check target is online
+      if (!presenceManager.isOnline(targetPuuid)) {
+        socket.emit("invite-failed", { reason: "friend_offline" });
+        logger.debug(`[invite] Target offline: ${targetPuuid}`);
+        return;
+      }
+
+      // 5. Send invitation to target
+      const senderName = presenceManager.getSummonerName(senderPuuid);
+      io.to(`user:${targetPuuid}`).emit("room-invite-received", {
+        fromPuuid: senderPuuid,
+        fromName: senderName,
+        roomCode,
+      });
+
+      // 6. Confirm to sender
+      socket.emit("invite-sent", { targetPuuid });
+
+      // 7. Update rate limit
+      inviteRateLimits.set(rateLimitKey, Date.now());
+
+      logger.info(`[invite] ${senderName} invited ${targetPuuid} to room ${roomCode}`);
+    } catch (err) {
+      logger.error("[invite] Error processing invite", err);
     }
   });
 });
