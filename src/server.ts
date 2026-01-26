@@ -19,6 +19,7 @@ import {
 import { CURRENT_EVENT_VERSION } from "./types";
 import roomRoutes from "./routes/room.routes";
 import { RoomService } from "./services/room.service";
+import { presenceManager } from "./services/presence.service";
 import type {
   JoinRoomPayload,
   LeaveRoomPayload,
@@ -208,6 +209,7 @@ io.on("connection", (socket) => {
   }));
 
   socket.on("disconnect", () => {
+    // Handle room membership cleanup
     const info = socketToMember.get(socket.id);
     socketToMember.delete(socket.id);
     removeClientVersion(socket.id);
@@ -215,6 +217,13 @@ io.on("connection", (socket) => {
     if (info) {
       logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
       handleMemberLeave(info.roomId, info.memberId, "disconnect");
+    }
+
+    // Handle presence cleanup (Story 4.2)
+    const puuid = presenceManager.disconnect(socket.id);
+    if (puuid) {
+      logger.debug(`[presence] User ${puuid} presence cleared`);
+      // Note: friend-offline notifications will be implemented in Story 4.3
     }
   });
 

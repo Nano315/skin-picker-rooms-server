@@ -4,6 +4,37 @@ export type GroupSkinOption = {
   auraColor: string | null; // e.g. "#6248FF"
 };
 
+// --- Presence System Types (Story 4.2) ---
+
+export type ConnectionInfo = {
+  socketId: string;
+  summonerName: string;
+  connectedAt: Date;
+};
+
+// Payload for 'identify' event (C->S)
+export type IdentifyPayload = {
+  puuid: string;
+  summonerName: string;
+  friends: string[];
+};
+
+// Payload for 'identity-confirmed' event (S->C)
+export type IdentityConfirmedPayload = {
+  onlineFriends: string[];
+};
+
+// Payload for 'friend-online' event (S->C)
+export type FriendOnlinePayload = {
+  puuid: string;
+  summonerName: string;
+};
+
+// Payload for 'friend-offline' event (S->C)
+export type FriendOfflinePayload = {
+  puuid: string;
+};
+
 export type ChromaCombination = {
   color: string;
   members: Array<{ memberId: string; skinId: number; chromaId: number }>;
