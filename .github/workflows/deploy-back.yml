@@ -27,11 +27,11 @@ jobs:
           if [[ "$TAG" == *-beta* ]]; then
             echo "target=staging" >> "$GITHUB_OUTPUT"
             echo "app_name=skin-picker-rooms-server-staging" >> "$GITHUB_OUTPUT"
-            echo "deploy_path=~/Skin-Picker/skin-picker-rooms-server-staging" >> "$GITHUB_OUTPUT"
+            echo "deploy_path=/home/ubuntu/Skin-Picker/skin-picker-rooms-server-staging" >> "$GITHUB_OUTPUT"
           else
             echo "target=production" >> "$GITHUB_OUTPUT"
             echo "app_name=skin-picker-rooms-server" >> "$GITHUB_OUTPUT"
-            echo "deploy_path=~/Skin-Picker/skin-picker-rooms-server" >> "$GITHUB_OUTPUT"
+            echo "deploy_path=/home/ubuntu/Skin-Picker/skin-picker-rooms-server" >> "$GITHUB_OUTPUT"
           fi
           echo "Deploying $TAG to ${{ steps.env.outputs.target || 'determined environment' }}"
 
