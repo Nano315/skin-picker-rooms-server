@@ -52,11 +52,14 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            # Install production dependencies only
-            npm ci --omit=dev
+            # Install all deps (need typescript for build)
+            npm ci
 
             # Build — if this fails, PM2 process is NOT restarted
             npm run build
+
+            # Remove devDependencies for production
+            npm ci --omit=dev
 
             # Restart only the target PM2 process
             pm2 startOrRestart ecosystem.config.js --only "$APP_NAME"
