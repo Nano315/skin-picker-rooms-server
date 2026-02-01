@@ -1,0 +1,66 @@
+name: Deploy Backend
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: npm ci
+      - run: npm test -- --coverage
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine environment from tag
+        id: env
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *-beta* ]]; then
+            echo "target=staging" >> "$GITHUB_OUTPUT"
+            echo "app_name=skin-picker-rooms-server-staging" >> "$GITHUB_OUTPUT"
+            echo "deploy_path=~/Skin-Picker/skin-picker-rooms-server-staging" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=production" >> "$GITHUB_OUTPUT"
+            echo "app_name=skin-picker-rooms-server" >> "$GITHUB_OUTPUT"
+            echo "deploy_path=~/Skin-Picker/skin-picker-rooms-server" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Deploying $TAG to ${{ steps.env.outputs.target || 'determined environment' }}"
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            DEPLOY_PATH="${{ steps.env.outputs.deploy_path }}"
+            APP_NAME="${{ steps.env.outputs.app_name }}"
+
+            cd "$DEPLOY_PATH"
+
+            # Clean pull — no merge conflicts
+            git fetch origin
+            git reset --hard origin/main
+
+            # Install production dependencies only
+            npm ci --omit=dev
+
+            # Build — if this fails, PM2 process is NOT restarted
+            npm run build
+
+            # Restart only the target PM2 process
+            pm2 startOrRestart ecosystem.config.js --only "$APP_NAME"
+
+            # Verify process is online
+            sleep 2
+            pm2 show "$APP_NAME" | grep -q "online" && echo "✓ $APP_NAME is online" || (echo "✗ $APP_NAME failed to start" && exit 1)
