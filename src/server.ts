@@ -457,7 +457,21 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // 5. Send invitation to target
+      // 5. Check target is not already in the room
+      const room = roomService.getRoomByCode(roomCode);
+      if (room) {
+        const targetSocketId = presenceManager.getSocketId(targetPuuid);
+        if (targetSocketId) {
+          const targetMemberInfo = socketToMember.get(targetSocketId);
+          if (targetMemberInfo && targetMemberInfo.roomId === room.id) {
+            socket.emit("invite-failed", { reason: "already_in_room" });
+            logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
+            return;
+          }
+        }
+      }
+
+      // 6. Send invitation to target
       const senderName = presenceManager.getSummonerName(senderPuuid);
       io.to(`user:${targetPuuid}`).emit("room-invite-received", {
         fromPuuid: senderPuuid,
@@ -465,10 +479,10 @@ io.on("connection", (socket) => {
         roomCode,
       });
 
-      // 6. Confirm to sender
+      // 7. Confirm to sender
       socket.emit("invite-sent", { targetPuuid });
 
-      // 7. Update rate limit
+      // 8. Update rate limit
       inviteRateLimits.set(rateLimitKey, Date.now());
 
       logger.info(`[invite] ${senderName} invited ${targetPuuid} to room ${roomCode}`);
