@@ -3,7 +3,7 @@
 <html lang="en">
 
 <head>
-    <title>Code coverage report for src/utils/socketHelpers.ts</title>
+    <title>Code coverage report for src/utils/versionAdapter.ts</title>
     <meta charset="utf-8" />
     <link rel="stylesheet" href="../../prettify.css" />
     <link rel="stylesheet" href="../../base.css" />
@@ -19,34 +19,34 @@
 <body>
 <div class='wrapper'>
     <div class='pad1'>
-        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/utils</a> socketHelpers.ts</h1>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/utils</a> versionAdapter.ts</h1>
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">41.66% </span>
+                <span class="strong">89.28% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>15/36</span>
-            </div>
-        
-            
-            <div class='fl pad1y space-right2'>
-                <span class="strong">14.28% </span>
-                <span class="quiet">Branches</span>
-                <span class='fraction'>2/14</span>
+                <span class='fraction'>25/28</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">50% </span>
-                <span class="quiet">Functions</span>
+                <span class="quiet">Branches</span>
                 <span class='fraction'>4/8</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">41.66% </span>
+                <span class="strong">100% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>7/7</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">89.28% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>15/36</span>
+                <span class='fraction'>25/28</span>
             </div>
         
             
@@ -61,7 +61,7 @@
             </div>
         </template>
     </div>
-    <div class='status-line low'></div>
+    <div class='status-line high'></div>
     <pre><table class="coverage">
 <tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
 <a name='L2'></a><a href='#L2'>2</a>
@@ -195,11 +195,67 @@
 <a name='L130'></a><a href='#L130'>130</a>
 <a name='L131'></a><a href='#L131'>131</a>
 <a name='L132'></a><a href='#L132'>132</a>
-<a name='L133'></a><a href='#L133'>133</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
-<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -210,58 +266,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">1x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">55x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -272,18 +287,6 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">160x</span>
-<span class="cline-any cline-yes">31x</span>
-<span class="cline-any cline-yes">31x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">28x</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -294,25 +297,11 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">3x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">3x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">3x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">5x</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -321,142 +310,276 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">5x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">44x</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import type { Socket } from "socket.io";
-import type { Room, Member } from "../types";
-import { RoomService } from "../services/room.service";
-import { logger } from "./logger";
-import { AppError, formatErrorResponse, ErrorCodes } from "./errors";
-&nbsp;
-/**
- * Gets a room by ID, logging a warning if not found.
- * @returns The room if found, null otherwise.
- */
-export function <span class="fstat-no" title="function not covered" >getRoomOrWarn(</span>
-  roomService: RoomService,
-  roomId: string,
-  eventName: string
-): Room | null {
-  const room = <span class="cstat-no" title="statement not covered" >roomService.getRoom(roomId);</span>
-<span class="cstat-no" title="statement not covered" >  if (!room) {</span>
-<span class="cstat-no" title="statement not covered" >    logger.warn(`[${eventName}] room ${roomId} not found`);</span>
-<span class="cstat-no" title="statement not covered" >    return null;</span>
-  }
-<span class="cstat-no" title="statement not covered" >  return room;</span>
-}
-&nbsp;
-/**
- * Gets a member from a room by ID, logging a warning if not found.
- * @returns The member if found, null otherwise.
- */
-export function <span class="fstat-no" title="function not covered" >getMemberOrWarn(</span>
-  room: Room,
-  memberId: string,
-  eventName: string
-): Member | null {
-  const member = <span class="cstat-no" title="statement not covered" >room.members.get(memberId);</span>
-<span class="cstat-no" title="statement not covered" >  if (!member) {</span>
-<span class="cstat-no" title="statement not covered" >    logger.warn(`[${eventName}] member ${memberId} not found in room ${room.id}`);</span>
-<span class="cstat-no" title="statement not covered" >    return null;</span>
-  }
-<span class="cstat-no" title="statement not covered" >  return member;</span>
-}
-&nbsp;
-/**
- * Gets both room and member, logging warnings if either is not found.
- * Convenience function combining getRoomOrWarn and getMemberOrWarn.
- * @returns Object with room and member, or null values if not found.
- */
-export function <span class="fstat-no" title="function not covered" >getRoomAndMemberOrWarn(</span>
-  roomService: RoomService,
-  roomId: string,
-  memberId: string,
-  eventName: string
-): { room: Room | null; member: Member | null } {
-  const room = <span class="cstat-no" title="statement not covered" >getRoomOrWarn(roomService, roomId, eventName);</span>
-<span class="cstat-no" title="statement not covered" >  if (!room) {</span>
-<span class="cstat-no" title="statement not covered" >    return { room: null, member: null };</span>
-  }
-  const member = <span class="cstat-no" title="statement not covered" >getMemberOrWarn(room, memberId, eventName);</span>
-<span class="cstat-no" title="statement not covered" >  return { room, member };</span>
-}
-&nbsp;
-/**
- * Creates a safe handler factory bound to a specific socket.
- * Use this to wrap Socket.io event handlers with try-catch error handling.
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">44x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">36x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-yes">55x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/**
+ * Version Adapter Utilities
  *
- * @param socket - The Socket.io socket instance
- * @returns A function that wraps handlers with error handling
- *
- * @example
- * io.on("connection", (socket) =&gt; {
- *   const safe = createSafeHandler(socket);
- *   socket.on("join-room", safe("join-room", (payload) =&gt; { ... }));
- * });
+ * Handles transforming payloads between different event versions
+ * to maintain backwards compatibility with older clients.
  */
-export function createSafeHandler(socket: Socket) {
-  return function safeHandler&lt;T&gt;(
-    eventName: string,
-    handler: (payload: T) =&gt; void | Promise&lt;void&gt;
-  ): (payload: T) =&gt; void {
-    return (payload: T) =&gt; {
-      try {
-        const result = handler(payload);
 &nbsp;
-        // Handle async handlers
-        <span class="missing-if-branch" title="if path not taken" >I</span>if (result instanceof Promise) {
-<span class="cstat-no" title="statement not covered" >          result.catch(<span class="fstat-no" title="function not covered" >(e</span>rror: unknown) =&gt; {</span>
-<span class="cstat-no" title="statement not covered" >            handleError(eventName, error, payload, socket);</span>
-          });
-        }
-      } catch (error: unknown) {
-        handleError(eventName, error, payload, socket);
-      }
+import type {
+  EventVersion,
+  ColorSuggestionV1,
+  ColorSuggestionV2,
+  RoomStateV1,
+  RoomStateV2,
+  GroupApplyComboV1,
+  GroupApplyComboV2,
+  RoomMember,
+  SynergyInfo,
+  ComboPick,
+} from "../types";
+import { CURRENT_EVENT_VERSION } from "../types";
+&nbsp;
+// ============================================
+// Socket Version Registry
+// ============================================
+&nbsp;
+const socketVersions = new Map&lt;string, EventVersion&gt;();
+&nbsp;
+/**
+ * Register a client's supported version
+ */
+export function registerClientVersion(socketId: string, version: number): EventVersion {
+  const safeVersion = Math.max(1, Math.min(version, CURRENT_EVENT_VERSION)) as EventVersion;
+  socketVersions.set(socketId, safeVersion);
+  return safeVersion;
+}
+&nbsp;
+/**
+ * Get a client's registered version (default to v1 for backwards compat)
+ */
+export function getClientVersion(socketId: string): EventVersion {
+  return socketVersions.get(socketId) ?? <span class="branch-1 cbranch-no" title="branch not covered" >1;</span>
+}
+&nbsp;
+/**
+ * Remove client version on disconnect
+ */
+export function removeClientVersion(socketId: string): void {
+  socketVersions.delete(socketId);
+}
+&nbsp;
+// ============================================
+// Color Suggestion Adapters
+// ============================================
+&nbsp;
+interface ColorSuggestionData {
+  memberId: string;
+  memberName: string;
+  skinId: number;
+  chromaId: number;
+}
+&nbsp;
+export function createColorSuggestionPayload(
+  data: ColorSuggestionData,
+  clientVersion: EventVersion
+): ColorSuggestionV1 | ColorSuggestionV2 {
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (clientVersion &gt;= 2) {
+<span class="cstat-no" title="statement not covered" >    return {</span>
+      version: 2,
+      memberId: data.memberId,
+      memberName: data.memberName,
+      skinId: data.skinId,
+      chromaId: data.chromaId,
     };
+  }
+&nbsp;
+  // V1 format (legacy) - uses senderName instead of memberName
+  return {
+    memberId: data.memberId,
+    senderName: data.memberName,
+    skinId: data.skinId,
+    chromaId: data.chromaId,
   };
 }
 &nbsp;
+// ============================================
+// Room State Adapters
+// ============================================
+&nbsp;
+interface RoomStateData {
+  id: string;
+  code: string;
+  ownerId: string;
+  members: RoomMember[];
+  synergy?: SynergyInfo;
+  activeSynergy?: {
+    type: string;
+    color?: string;
+    skinLineId?: number;
+    skinLineName?: string;
+    timestamp: number;
+  };
+  activeColor?: string;
+  syncMode?: string; // Story 6.2
+}
+&nbsp;
+export function createRoomStatePayload(
+  data: RoomStateData,
+  clientVersion: EventVersion
+): RoomStateV1 | RoomStateV2 {
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (clientVersion &gt;= 2) {
+<span class="cstat-no" title="statement not covered" >    return {</span>
+      version: 2,
+      ...data,
+    };
+  }
+&nbsp;
+  // V1 format (legacy) - no version field
+  return { ...data };
+}
+&nbsp;
+// ============================================
+// Group Apply Combo Adapters
+// ============================================
+&nbsp;
+interface GroupApplyComboData {
+  type: "sameColor" | "skinLine";
+  color?: string;
+  skinLineId?: number;
+  skinLineName?: string;
+  picks: ComboPick[];
+  sourceMemberId?: string;
+  autoApplied?: boolean;
+}
+&nbsp;
+export function createGroupApplyComboPayload(
+  data: GroupApplyComboData,
+  clientVersion: EventVersion
+): GroupApplyComboV1 | GroupApplyComboV2 {
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (clientVersion &gt;= 2) {
+<span class="cstat-no" title="statement not covered" >    return {</span>
+      version: 2,
+      ...data,
+    };
+  }
+&nbsp;
+  // V1 format (legacy) - no version field
+  return { ...data };
+}
+&nbsp;
+// ============================================
+// Broadcast Helper for Version-aware Emission
+// ============================================
+&nbsp;
+import type { Server, Socket } from "socket.io";
+&nbsp;
 /**
- * Internal function to handle errors consistently.
+ * Emit an event to a room with version-appropriate payloads
+ * Each client in the room receives the payload in their supported version
  */
-function handleError&lt;T&gt;(
-  eventName: string,
-  error: unknown,
-  payload: T,
-  socket: Socket
-): void {
-  if (error instanceof AppError) {
-    // Operational error - expected, log as warning
-    logger.warn(`[${eventName}] ${error.message}`, {
-      code: error.code,
-      context: error.context,
-      socketId: socket.id,
-    });
+export async function emitVersionedToRoom&lt;T&gt;(
+  io: Server,
+  roomId: string,
+  event: string,
+  createPayload: (version: EventVersion) =&gt; T
+): Promise&lt;void&gt; {
+  const sockets = await io.in(roomId).fetchSockets();
 &nbsp;
-    // Emit error to client
-    socket.emit("error", formatErrorResponse(error));
-  } else <span class="missing-if-branch" title="else path not taken" >E</span>{
-    // Programming error - unexpected, log as error with full context
-    const errorMessage = <span class="cstat-no" title="statement not covered" >error instanceof Error ? error.message : String(error);</span>
-    const errorStack = <span class="cstat-no" title="statement not covered" >error instanceof Error ? error.stack : undefined;</span>
-&nbsp;
-<span class="cstat-no" title="statement not covered" >    logger.error(`[${eventName}] Unexpected error: ${errorMessage}`, {</span>
-      error: errorMessage,
-      stack: errorStack,
-      payload,
-      socketId: socket.id,
-    });
-&nbsp;
-    // Emit generic error to client (don't expose internal details)
-<span class="cstat-no" title="statement not covered" >    socket.emit("error", {</span>
-      code: ErrorCodes.INTERNAL_ERROR,
-      message: "An unexpected error occurred",
-    });
+  for (const socket of sockets) {
+    const version = getClientVersion(socket.id);
+    const payload = createPayload(version);
+    socket.emit(event, payload);
   }
 }
 &nbsp;</pre></td></tr></table></pre>

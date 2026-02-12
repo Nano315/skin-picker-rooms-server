@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RoomService = void 0;
 const crypto_1 = require("crypto");
 const logger_1 = require("../utils/logger");
+const GROUP_HISTORY_LIMIT = 3;
 class RoomService {
     constructor() {
         this.rooms = new Map();
@@ -40,6 +41,9 @@ class RoomService {
             code,
             ownerId,
             members: new Map([[ownerId, owner]]),
+            history: [],
+            syncMode: "both",
+            skinLineHistory: [],
         };
         this.rooms.set(roomId, room);
         this.roomsByCode.set(code, room);
@@ -112,7 +116,7 @@ class RoomService {
         // For synergy purposes, we only care about members who have submitted options.
         const readyMembers = allMembers.filter((m) => m.options && m.options.length > 0);
         if (readyMembers.length < 2) { // Cannot have a synergy with less than 2 people.
-            room.synergy = { colors: [] };
+            room.synergy = { colors: [], skinLines: [] };
             return;
         }
         const allColors = new Set();
@@ -145,11 +149,263 @@ class RoomService {
             }
         }
         synergies.sort((a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount);
-        room.synergy = { colors: synergies };
-        if (synergies.length > 0) {
-            // Only log "interesting" events to keep logs clean
-            logger_1.logger.debug(`[Synergy] Room ${room.code}: Found ${synergies.length} synergies (Best: ${synergies[0].color})`);
+        // --- Skin line synergy computation (Story 6.3) ---
+        const allSkinLines = new Map();
+        for (const member of readyMembers) {
+            for (const opt of member.options) {
+                if (opt.skinLineId != null) {
+                    if (!allSkinLines.has(opt.skinLineId)) {
+                        allSkinLines.set(opt.skinLineId, {
+                            name: opt.skinLineName || `SkinLine ${opt.skinLineId}`,
+                            memberOptions: new Map(),
+                        });
+                    }
+                    const lineData = allSkinLines.get(opt.skinLineId);
+                    if (!lineData.memberOptions.has(member.id)) {
+                        lineData.memberOptions.set(member.id, []);
+                    }
+                    lineData.memberOptions.get(member.id).push(opt);
+                }
+            }
         }
+        const skinLineSynergies = [];
+        for (const [skinLineId, { name, memberOptions }] of allSkinLines) {
+            if (memberOptions.size >= 2) {
+                const participants = Array.from(memberOptions.keys());
+                let combinationCount = 1;
+                for (const opts of memberOptions.values()) {
+                    combinationCount *= opts.length;
+                }
+                skinLineSynergies.push({
+                    type: "skinLine",
+                    skinLineId,
+                    skinLineName: name,
+                    members: participants,
+                    coverage: participants.length / allMembers.length,
+                    combinationCount,
+                });
+            }
+        }
+        // Exclude Base (id=1) unless it's the only skin line synergy
+        const nonBaseSynergies = skinLineSynergies.filter((s) => s.skinLineId !== 1);
+        const finalSkinLineSynergies = nonBaseSynergies.length > 0 ? nonBaseSynergies : skinLineSynergies;
+        finalSkinLineSynergies.sort((a, b) => b.coverage - a.coverage || b.combinationCount - a.combinationCount);
+        room.synergy = { colors: synergies, skinLines: finalSkinLineSynergies };
+        if (synergies.length > 0) {
+            logger_1.logger.debug(`[Synergy] Room ${room.code}: Found ${synergies.length} color synergies (Best: ${synergies[0].color})`);
+        }
+        if (finalSkinLineSynergies.length > 0) {
+            logger_1.logger.debug(`[Synergy] Room ${room.code}: Found ${finalSkinLineSynergies.length} skin line synergies (Best: ${finalSkinLineSynergies[0].skinLineName}, coverage: ${finalSkinLineSynergies[0].coverage})`);
+        }
+    }
+    /**
+     * Get available synergies filtering out recently used colors
+     */
+    getAvailableSynergies(room) {
+        if (!room.synergy || room.synergy.colors.length === 0) {
+            return [];
+        }
+        const recentColors = room.history.map((h) => h.color);
+        const filtered = room.synergy.colors.filter((s) => !recentColors.includes(s.color));
+        // Fallback: if all synergies are in history, return all synergies
+        return filtered.length > 0 ? filtered : room.synergy.colors;
+    }
+    /**
+     * Add a color combination to room history
+     */
+    addToHistory(room, color, picks) {
+        const combination = {
+            color,
+            members: picks,
+            timestamp: Date.now(),
+        };
+        room.history.push(combination);
+        // Keep only the last N combinations (FIFO)
+        while (room.history.length > GROUP_HISTORY_LIMIT) {
+            room.history.shift();
+        }
+        logger_1.logger.debug(`[History] Room ${room.code}: Added color ${color} to history (${room.history.length}/${GROUP_HISTORY_LIMIT})`);
+    }
+    /**
+     * Get available skin line synergies filtering out recently used skin lines
+     */
+    getAvailableSkinLineSynergies(room) {
+        if (!room.synergy?.skinLines?.length)
+            return [];
+        const recentSkinLines = (room.skinLineHistory ?? []).map((h) => h.skinLineId);
+        const filtered = room.synergy.skinLines.filter((s) => !recentSkinLines.includes(s.skinLineId));
+        return filtered.length > 0 ? filtered : room.synergy.skinLines;
+    }
+    /**
+     * Add a skin line combination to room history
+     */
+    addSkinLineToHistory(room, skinLineId, skinLineName, picks) {
+        const combination = {
+            skinLineId,
+            skinLineName,
+            members: picks,
+            timestamp: Date.now(),
+        };
+        room.skinLineHistory.push(combination);
+        while (room.skinLineHistory.length > GROUP_HISTORY_LIMIT) {
+            room.skinLineHistory.shift();
+        }
+        logger_1.logger.debug(`[History] Room ${room.code}: Added skin line ${skinLineName} to history (${room.skinLineHistory.length}/${GROUP_HISTORY_LIMIT})`);
+    }
+    /**
+     * Generate picks based on a random skin line synergy.
+     * chromaId is always 0 (base skin, no chroma).
+     */
+    generateSkinLinePicks(room) {
+        const availableSkinLines = this.getAvailableSkinLineSynergies(room);
+        if (availableSkinLines.length === 0)
+            return null;
+        const idx = (0, crypto_1.randomInt)(0, availableSkinLines.length);
+        const synergy = availableSkinLines[idx];
+        const picks = [];
+        for (const member of room.members.values()) {
+            if (!member.options || member.options.length === 0) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
+            const opts = member.options.filter((o) => o.skinLineId === synergy.skinLineId);
+            if (opts.length === 0) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
+            const optIdx = (0, crypto_1.randomInt)(0, opts.length);
+            const opt = opts[optIdx];
+            member.skinId = opt.skinId;
+            member.chromaId = 0;
+            picks.push({ memberId: member.id, skinId: opt.skinId, chromaId: 0 });
+        }
+        this.addSkinLineToHistory(room, synergy.skinLineId, synergy.skinLineName, picks);
+        room.activeSynergy = {
+            type: "skinLine",
+            skinLineId: synergy.skinLineId,
+            skinLineName: synergy.skinLineName,
+            timestamp: Date.now(),
+        };
+        logger_1.logger.info(`[AutoApply] Room ${room.code}: Auto-applied skin line ${synergy.skinLineName}`);
+        return { skinLineId: synergy.skinLineId, skinLineName: synergy.skinLineName, picks };
+    }
+    /**
+     * Apply a specific skin line synergy (called from UI / Story 6.6).
+     */
+    applySkinLineSynergy(room, skinLineId) {
+        const synergy = room.synergy?.skinLines?.find((s) => s.skinLineId === skinLineId);
+        if (!synergy)
+            return null;
+        const picks = [];
+        for (const member of room.members.values()) {
+            if (!member.options || member.options.length === 0) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
+            const opts = member.options.filter((o) => o.skinLineId === skinLineId);
+            if (opts.length === 0) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
+            const optIdx = (0, crypto_1.randomInt)(0, opts.length);
+            const opt = opts[optIdx];
+            member.skinId = opt.skinId;
+            member.chromaId = 0;
+            picks.push({ memberId: member.id, skinId: opt.skinId, chromaId: 0 });
+        }
+        this.addSkinLineToHistory(room, skinLineId, synergy.skinLineName, picks);
+        room.activeSynergy = {
+            type: "skinLine",
+            skinLineId,
+            skinLineName: synergy.skinLineName,
+            timestamp: Date.now(),
+        };
+        logger_1.logger.info(`[ApplySkinLine] Room ${room.code}: Applied skin line ${synergy.skinLineName}`);
+        return { skinLineId, skinLineName: synergy.skinLineName, picks };
+    }
+    /**
+     * Check if all members have picked a champion and return true if auto-apply should trigger
+     */
+    shouldAutoApply(room) {
+        const allMembers = Array.from(room.members.values());
+        // Need at least 2 members
+        if (allMembers.length < 2)
+            return false;
+        // All members must have a champion selected (championId > 0)
+        const allHaveChampion = allMembers.every((m) => m.championId > 0);
+        if (!allHaveChampion)
+            return false;
+        // All members must have options
+        const allHaveOptions = allMembers.every((m) => m.options && m.options.length > 0);
+        if (!allHaveOptions)
+            return false;
+        // Must have at least one synergy available (depending on mode)
+        const mode = room.syncMode ?? "both";
+        const hasColorSynergies = this.getAvailableSynergies(room).length > 0;
+        const hasSkinLineSynergies = this.getAvailableSkinLineSynergies(room).length > 0;
+        if (mode === "chromas" && !hasColorSynergies)
+            return false;
+        if (mode === "skins" && !hasSkinLineSynergies)
+            return false;
+        if (mode === "both" && !hasSkinLineSynergies && !hasColorSynergies)
+            return false;
+        // Don't auto-apply if already applied recently (within last 5 seconds)
+        if (room.activeSynergy && Date.now() - room.activeSynergy.timestamp < 5000) {
+            return false;
+        }
+        return true;
+    }
+    /**
+     * Select and apply synergy based on room's syncMode.
+     * Returns picks or null if no synergy available.
+     */
+    generateAutoApplyPicks(room) {
+        const mode = room.syncMode ?? "both";
+        if (mode === "skins") {
+            return this.generateSkinLinePicks(room);
+        }
+        if (mode === "both") {
+            // Try skin line first, fallback to color
+            const skinLineResult = this.generateSkinLinePicks(room);
+            if (skinLineResult)
+                return skinLineResult;
+            return this.generateColorPicks(room);
+        }
+        // Mode "chromas" — existing behavior
+        return this.generateColorPicks(room);
+    }
+    /**
+     * Generate picks based on a random color synergy (original behavior).
+     */
+    generateColorPicks(room) {
+        const availableSynergies = this.getAvailableSynergies(room);
+        if (availableSynergies.length === 0)
+            return null;
+        const idx = (0, crypto_1.randomInt)(0, availableSynergies.length);
+        const synergy = availableSynergies[idx];
+        const color = synergy.color;
+        const picks = [];
+        for (const m of room.members.values()) {
+            if (!m.options || m.options.length === 0) {
+                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+                continue;
+            }
+            const opts = m.options.filter((o) => o.auraColor === color);
+            if (opts.length === 0) {
+                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+                continue;
+            }
+            const optIdx = (0, crypto_1.randomInt)(0, opts.length);
+            const opt = opts[optIdx];
+            m.skinId = opt.skinId;
+            m.chromaId = opt.chromaId;
+            picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
+        }
+        this.addToHistory(room, color, picks);
+        room.activeSynergy = { type: "sameColor", color, timestamp: Date.now() };
+        room.activeColor = color;
+        logger_1.logger.info(`[AutoApply] Room ${room.code}: Auto-applied color ${color}`);
+        return { color, picks };
     }
     serializeRoom(room) {
         return {
@@ -157,9 +413,10 @@ class RoomService {
             code: room.code,
             ownerId: room.ownerId,
             members: Array.from(room.members.values()),
-            synergy: room.synergy ?? undefined,
+            synergy: room.synergy ?? { colors: [], skinLines: [] },
             activeSynergy: room.activeSynergy,
             activeColor: room.activeColor,
+            syncMode: room.syncMode ?? "both",
         };
     }
     // --- Testing helper ---
