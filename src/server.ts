@@ -27,6 +27,9 @@ import type {
   OwnedOptionsPayload,
   RequestGroupRerollPayload,
   SuggestColorPayload,
+  SetSyncModePayload,
+  ApplySkinLineSynergyPayload,
+  ApplyCustomComboPayload,
   IdentifyPayload,
   SendRoomInvitePayload,
 } from "./types";
@@ -194,15 +197,17 @@ io.on("connection", (socket) => {
 
     roomService.recomputeSynergy(room);
 
-    // Check if we should auto-apply a color (all members have champions and options)
+    // Check if we should auto-apply (all members have champions and options)
     if (roomService.shouldAutoApply(room)) {
       const result = roomService.generateAutoApplyPicks(room);
       if (result) {
-        // Emit auto-apply combo
+        // Emit auto-apply combo (color or skin line depending on syncMode)
         emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
           createGroupApplyComboPayload({
-            type: "sameColor",
+            type: result.skinLineId ? "skinLine" : "sameColor",
             color: result.color,
+            skinLineId: result.skinLineId,
+            skinLineName: result.skinLineName,
             picks: result.picks,
             autoApplied: true,
           }, version)
@@ -375,6 +380,132 @@ io.on("connection", (socket) => {
       if (ack) ack({ success: false, error: 'Internal server error' });
     }
   });
+
+  // --- Set Sync Mode (Story 6.4) ---
+  socket.on("set-sync-mode", safeHandler<SetSyncModePayload>("set-sync-mode", (payload) => {
+    const { roomId, memberId, mode } = payload;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    if (room.ownerId !== memberId) {
+      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can change sync mode`, true, {
+        roomId,
+        memberId,
+        ownerId: room.ownerId,
+      });
+    }
+
+    if (!["chromas", "skins", "both"].includes(mode)) {
+      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Invalid sync mode: ${mode}`, true, { mode });
+    }
+
+    room.syncMode = mode;
+    logger.info(`[SyncMode] Room ${room.code}: Mode changed to ${mode} by owner`);
+
+    // Broadcast updated room state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
+  }));
+
+  // --- Apply Skin Line Synergy (Story 6.6) ---
+  socket.on("apply-skin-line-synergy", safeHandler<ApplySkinLineSynergyPayload>("apply-skin-line-synergy", (payload) => {
+    const { roomId, memberId, skinLineId } = payload;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    if (room.ownerId !== memberId) {
+      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can apply skin line synergy`, true, {
+        roomId,
+        memberId,
+        ownerId: room.ownerId,
+      });
+    }
+
+    const result = roomService.applySkinLineSynergy(room, skinLineId);
+    if (!result) {
+      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Skin line ${skinLineId} not available`, true, { skinLineId });
+    }
+
+    logger.info(`[apply-skin-line-synergy] Applied skin line ${result.skinLineName} in room ${room.code}`);
+
+    // Broadcast combo
+    emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
+      createGroupApplyComboPayload({
+        type: "skinLine",
+        skinLineId: result.skinLineId,
+        skinLineName: result.skinLineName,
+        picks: result.picks,
+        autoApplied: false,
+      }, version)
+    );
+
+    // Broadcast updated room state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
+  }));
+
+  // --- Apply Custom Combo from Builder (Story 6.7) ---
+  socket.on("apply-custom-combo", safeHandler<ApplyCustomComboPayload>("apply-custom-combo", (payload) => {
+    const { roomId, memberId, picks } = payload;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    if (room.ownerId !== memberId) {
+      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can apply custom combo`, true, {
+        roomId,
+        memberId,
+        ownerId: room.ownerId,
+      });
+    }
+
+    if (!Array.isArray(picks) || picks.length === 0) {
+      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Picks array is required`, true, { picks });
+    }
+
+    // Apply picks to each member
+    for (const pick of picks) {
+      const member = room.members.get(pick.memberId);
+      if (member) {
+        member.skinId = pick.skinId;
+        member.chromaId = pick.chromaId;
+      }
+    }
+
+    room.activeSynergy = {
+      type: "custom",
+      timestamp: Date.now(),
+    };
+
+    logger.info(`[Builder] Room ${room.code}: Custom combo applied by owner (${picks.length} picks)`);
+
+    // Broadcast combo
+    emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
+      createGroupApplyComboPayload({
+        type: "sameColor",
+        picks,
+        autoApplied: false,
+      }, version)
+    );
+
+    // Broadcast updated room state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
+  }));
 
   // --- Identity Handshake (Story 4.3) ---
   socket.on("identify", (payload: IdentifyPayload) => {

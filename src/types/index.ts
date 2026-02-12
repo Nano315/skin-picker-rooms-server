@@ -2,6 +2,8 @@ export type GroupSkinOption = {
   skinId: number;
   chromaId: number; // 0 = base
   auraColor: string | null; // e.g. "#6248FF"
+  skinLineId?: number; // Story 6.2: skin line ID for synergy matching
+  skinLineName?: string; // Story 6.2: skin line name for display
 };
 
 // --- Presence System Types (Story 4.2) ---
@@ -87,8 +89,40 @@ export type ColorSynergy = {
   combinationCount: number; // total possible combinations
 };
 
+// Story 6.2: Skin line synergy type
+export type SkinLineSynergy = {
+  type: "skinLine";
+  skinLineId: number;
+  skinLineName: string;
+  members: string[]; // memberIds who have this skin line
+  coverage: number; // % of members (0-1)
+  combinationCount: number; // total possible combinations
+};
+
 export type SynergySummary = {
   colors: ColorSynergy[];
+  skinLines: SkinLineSynergy[]; // Story 6.2: skin line synergies
+};
+
+// Story 6.2: Sync mode for room
+export type SyncMode = "chromas" | "skins" | "both";
+
+// Story 6.2: Active synergy applied to the room
+export type ActiveSynergy = {
+  type: "sameColor" | "skinLine" | "custom";
+  color?: string; // For type "sameColor"
+  skinLineId?: number; // For type "skinLine"
+  skinLineName?: string; // For type "skinLine"
+  timestamp: number;
+  // Note: "custom" = manual picks via the Builder (Story 6.7)
+};
+
+// Story 6.2: Skin line combination for history
+export type SkinLineCombination = {
+  skinLineId: number;
+  skinLineName: string;
+  members: Array<{ memberId: string; skinId: number; chromaId: number }>;
+  timestamp: number;
 };
 
 export type Room = {
@@ -98,14 +132,13 @@ export type Room = {
   members: Map<string, Member>;
   synergy?: SynergySummary;
   // Active synergy applied
-  activeSynergy?: {
-    type: string;
-    color: string;
-    timestamp: number;
-  };
+  activeSynergy?: ActiveSynergy;
   activeColor?: string;
   // Group history - stores recent color combinations to avoid repetition
   history: ChromaCombination[];
+  // Story 6.2: Sync mode and skin line history
+  syncMode: SyncMode;
+  skinLineHistory: SkinLineCombination[];
 };
 
 // Re-export socket event types for convenience

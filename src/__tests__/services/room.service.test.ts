@@ -265,6 +265,196 @@ describe('RoomService', () => {
     });
   });
 
+  describe('recomputeSynergy - skin lines (Story 6.3)', () => {
+    it('should find a skin line synergy between 2 members with the same skin line', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 103015, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+      player2.options = [
+        { skinId: 103017, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(1);
+      expect(room.synergy?.skinLines[0].skinLineName).toBe('Star Guardian');
+      expect(room.synergy?.skinLines[0].skinLineId).toBe(10);
+      expect(room.synergy?.skinLines[0].coverage).toBe(1.0);
+      expect(room.synergy?.skinLines[0].combinationCount).toBe(1);
+    });
+
+    it('should find multiple skin line synergies with 3 members and mixed skin lines', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+      const { member: p3 } = service.joinRoom(room.code, 'Player3') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 2, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+      ];
+      p2.options = [
+        { skinId: 3, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 4, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+        { skinId: 5, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+      ];
+      p3.options = [
+        { skinId: 6, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(2);
+      // Star Guardian has 3/3 coverage, PROJECT has 2/3
+      expect(room.synergy?.skinLines[0].skinLineName).toBe('Star Guardian');
+      expect(room.synergy?.skinLines[0].coverage).toBe(1.0);
+      expect(room.synergy?.skinLines[0].combinationCount).toBe(1); // 1*1*1
+      expect(room.synergy?.skinLines[1].skinLineName).toBe('PROJECT');
+      expect(room.synergy?.skinLines[1].coverage).toBeCloseTo(2 / 3);
+      expect(room.synergy?.skinLines[1].combinationCount).toBe(2); // 1*2
+    });
+
+    it('should exclude Base skin line (id=1) when other synergies exist', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1001, chromaId: 0, auraColor: null, skinLineId: 1, skinLineName: 'Base' },
+        { skinId: 2001, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+      p2.options = [
+        { skinId: 1002, chromaId: 0, auraColor: null, skinLineId: 1, skinLineName: 'Base' },
+        { skinId: 2002, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(1);
+      expect(room.synergy?.skinLines[0].skinLineName).toBe('Star Guardian');
+    });
+
+    it('should include Base skin line when it is the only option', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1001, chromaId: 0, auraColor: null, skinLineId: 1, skinLineName: 'Base' },
+      ];
+      p2.options = [
+        { skinId: 2001, chromaId: 0, auraColor: null, skinLineId: 1, skinLineName: 'Base' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(1);
+      expect(room.synergy?.skinLines[0].skinLineId).toBe(1);
+    });
+
+    it('should calculate combinationCount correctly for skin lines', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      // Owner has 2 Star Guardian skins, Player2 has 3
+      owner.options = [
+        { skinId: 1, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 2, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+      p2.options = [
+        { skinId: 3, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 4, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 5, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines[0].combinationCount).toBe(6); // 2*3
+    });
+
+    it('should not create skin line synergy if only 1 member has the skin line', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+      p2.options = [
+        { skinId: 2, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(0);
+    });
+
+    it('should coexist with color synergies', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1, chromaId: 0, auraColor: 'Blue', skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+      p2.options = [
+        { skinId: 2, chromaId: 0, auraColor: 'Blue', skinLineId: 10, skinLineName: 'Star Guardian' },
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.colors).toHaveLength(1);
+      expect(room.synergy?.colors[0].color).toBe('Blue');
+      expect(room.synergy?.skinLines).toHaveLength(1);
+      expect(room.synergy?.skinLines[0].skinLineName).toBe('Star Guardian');
+    });
+
+    it('should handle options without skinLineId gracefully', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: p2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.options = [
+        { skinId: 1, chromaId: 0, auraColor: 'Blue' }, // No skinLineId
+      ];
+      p2.options = [
+        { skinId: 2, chromaId: 0, auraColor: 'Blue' }, // No skinLineId
+      ];
+
+      service.recomputeSynergy(room);
+
+      expect(room.synergy?.skinLines).toHaveLength(0);
+      expect(room.synergy?.colors).toHaveLength(1); // Color synergy still works
+    });
+
+    it('should complete in under 100ms with 5 members and 50 skins each', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const members = [owner];
+      for (let i = 1; i < 5; i++) {
+        const { member } = service.joinRoom(room.code, `Player${i + 1}`) as { room: any, member: any };
+        members.push(member);
+      }
+
+      for (const member of members) {
+        const options = [];
+        for (let j = 0; j < 50; j++) {
+          options.push({
+            skinId: member.id.charCodeAt(0) * 1000 + j,
+            chromaId: 0,
+            auraColor: j % 5 === 0 ? 'Blue' : null,
+            skinLineId: (j % 20) + 2, // Avoid Base (id=1)
+            skinLineName: `Line${(j % 20) + 2}`,
+          });
+        }
+        member.options = options;
+      }
+
+      const start = performance.now();
+      service.recomputeSynergy(room);
+      const elapsed = performance.now() - start;
+
+      expect(elapsed).toBeLessThan(100);
+      expect(room.synergy?.skinLines.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('history management', () => {
     it('should initialize room with empty history', () => {
       const { room } = service.createRoom('Owner');
@@ -540,6 +730,341 @@ describe('RoomService', () => {
       // Both should get Blue options assigned
       expect(owner.skinId).toBe(100);
       expect(owner.chromaId).toBe(10);
+    });
+  });
+
+  describe('auto-apply sync modes (Story 6.5)', () => {
+    function setupRoomWithSkinLines() {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+      owner.championId = 1;
+      owner.options = [
+        { skinId: 100, chromaId: 10, auraColor: 'Blue', skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 101, chromaId: 11, auraColor: 'Red', skinLineId: 20, skinLineName: 'PROJECT' },
+      ];
+      player2.championId = 2;
+      player2.options = [
+        { skinId: 200, chromaId: 20, auraColor: 'Blue', skinLineId: 10, skinLineName: 'Star Guardian' },
+        { skinId: 201, chromaId: 21, auraColor: 'Green', skinLineId: 30, skinLineName: 'Arcade' },
+      ];
+
+      service.recomputeSynergy(room);
+      return { room, owner, player2 };
+    }
+
+    describe('generateSkinLinePicks', () => {
+      it('should generate picks from a shared skin line', () => {
+        const { room, owner, player2 } = setupRoomWithSkinLines();
+
+        const result = service.generateSkinLinePicks(room);
+
+        expect(result).not.toBeNull();
+        expect(result?.skinLineId).toBe(10);
+        expect(result?.skinLineName).toBe('Star Guardian');
+        expect(result?.picks).toHaveLength(2);
+      });
+
+      it('should always set chromaId to 0 in skin line picks', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        const result = service.generateSkinLinePicks(room);
+
+        expect(result).not.toBeNull();
+        for (const pick of result!.picks) {
+          expect(pick.chromaId).toBe(0);
+        }
+      });
+
+      it('should update member skinId and set chromaId to 0', () => {
+        const { room, owner, player2 } = setupRoomWithSkinLines();
+
+        service.generateSkinLinePicks(room);
+
+        expect(owner.skinId).toBe(100); // Star Guardian skin
+        expect(owner.chromaId).toBe(0);
+        expect(player2.skinId).toBe(200);
+        expect(player2.chromaId).toBe(0);
+      });
+
+      it('should set activeSynergy with type skinLine', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        service.generateSkinLinePicks(room);
+
+        expect(room.activeSynergy).toBeDefined();
+        expect(room.activeSynergy?.type).toBe('skinLine');
+        expect(room.activeSynergy?.skinLineId).toBe(10);
+        expect(room.activeSynergy?.skinLineName).toBe('Star Guardian');
+      });
+
+      it('should add to skinLineHistory', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        service.generateSkinLinePicks(room);
+
+        expect(room.skinLineHistory).toHaveLength(1);
+        expect(room.skinLineHistory[0].skinLineId).toBe(10);
+      });
+
+      it('should return null when no skin line synergies exist', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }]; // No skinLineId
+        player2.championId = 2;
+        player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+        service.recomputeSynergy(room);
+        const result = service.generateSkinLinePicks(room);
+
+        expect(result).toBeNull();
+      });
+    });
+
+    describe('generateAutoApplyPicks with syncMode', () => {
+      it('should use skin line picks in mode "skins"', () => {
+        const { room } = setupRoomWithSkinLines();
+        room.syncMode = 'skins';
+
+        const result = service.generateAutoApplyPicks(room);
+
+        expect(result).not.toBeNull();
+        expect(result?.skinLineId).toBe(10);
+        expect(result?.skinLineName).toBe('Star Guardian');
+        expect(result?.color).toBeUndefined();
+      });
+
+      it('should return null in mode "skins" when no skin line synergies', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        player2.championId = 2;
+        player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+        service.recomputeSynergy(room);
+        room.syncMode = 'skins';
+
+        const result = service.generateAutoApplyPicks(room);
+        expect(result).toBeNull();
+      });
+
+      it('should try skin line first then fallback to color in mode "both"', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        // Only color synergy, no skin line
+        owner.championId = 1;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        player2.championId = 2;
+        player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+        service.recomputeSynergy(room);
+        room.syncMode = 'both';
+
+        const result = service.generateAutoApplyPicks(room);
+
+        expect(result).not.toBeNull();
+        expect(result?.color).toBe('Blue');
+        expect(result?.skinLineId).toBeUndefined();
+      });
+
+      it('should prefer skin line over color in mode "both" when available', () => {
+        const { room } = setupRoomWithSkinLines();
+        room.syncMode = 'both';
+
+        const result = service.generateAutoApplyPicks(room);
+
+        expect(result).not.toBeNull();
+        expect(result?.skinLineId).toBe(10);
+        expect(result?.skinLineName).toBe('Star Guardian');
+      });
+
+      it('should use color picks in mode "chromas"', () => {
+        const { room } = setupRoomWithSkinLines();
+        room.syncMode = 'chromas';
+
+        const result = service.generateAutoApplyPicks(room);
+
+        expect(result).not.toBeNull();
+        expect(result?.color).toBe('Blue');
+        expect(result?.skinLineId).toBeUndefined();
+      });
+    });
+
+    describe('shouldAutoApply with syncMode', () => {
+      it('should return false in mode "chromas" when only skin line synergies exist', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [
+          { skinId: 100, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        ];
+        player2.championId = 2;
+        player2.options = [
+          { skinId: 200, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        ];
+
+        service.recomputeSynergy(room);
+        room.syncMode = 'chromas';
+
+        expect(service.shouldAutoApply(room)).toBe(false);
+      });
+
+      it('should return false in mode "skins" when only color synergies exist', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        player2.championId = 2;
+        player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+        service.recomputeSynergy(room);
+        room.syncMode = 'skins';
+
+        expect(service.shouldAutoApply(room)).toBe(false);
+      });
+
+      it('should return true in mode "both" when only color synergies exist', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        player2.championId = 2;
+        player2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+
+        service.recomputeSynergy(room);
+        room.syncMode = 'both';
+
+        expect(service.shouldAutoApply(room)).toBe(true);
+      });
+
+      it('should return true in mode "skins" when skin line synergies exist', () => {
+        const { room } = setupRoomWithSkinLines();
+        room.syncMode = 'skins';
+
+        expect(service.shouldAutoApply(room)).toBe(true);
+      });
+    });
+
+    describe('skin line history management', () => {
+      it('should initialize room with empty skinLineHistory', () => {
+        const { room } = service.createRoom('Owner');
+        expect(room.skinLineHistory).toBeDefined();
+        expect(room.skinLineHistory).toHaveLength(0);
+      });
+
+      it('should add skin line to history', () => {
+        const { room } = service.createRoom('Owner');
+        const picks = [{ memberId: 'member1', skinId: 100, chromaId: 0 }];
+
+        service.addSkinLineToHistory(room, 10, 'Star Guardian', picks);
+
+        expect(room.skinLineHistory).toHaveLength(1);
+        expect(room.skinLineHistory[0].skinLineId).toBe(10);
+        expect(room.skinLineHistory[0].skinLineName).toBe('Star Guardian');
+      });
+
+      it('should respect FIFO limit of 3 for skin line history', () => {
+        const { room } = service.createRoom('Owner');
+
+        service.addSkinLineToHistory(room, 10, 'Star Guardian', []);
+        service.addSkinLineToHistory(room, 20, 'PROJECT', []);
+        service.addSkinLineToHistory(room, 30, 'Arcade', []);
+        service.addSkinLineToHistory(room, 40, 'Pool Party', []);
+
+        expect(room.skinLineHistory).toHaveLength(3);
+        expect(room.skinLineHistory.map(h => h.skinLineId)).toEqual([20, 30, 40]);
+      });
+
+      it('should filter recently used skin lines from available synergies', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        // Add Star Guardian to history
+        service.addSkinLineToHistory(room, 10, 'Star Guardian', []);
+
+        // Star Guardian synergy should be filtered out (but it's the only one, so fallback)
+        const available = service.getAvailableSkinLineSynergies(room);
+
+        // Since Star Guardian is the only skin line synergy, fallback returns all
+        expect(available).toHaveLength(1);
+        expect(available[0].skinLineId).toBe(10);
+      });
+
+      it('should filter used skin lines when alternatives exist', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any, member: any };
+
+        owner.championId = 1;
+        owner.options = [
+          { skinId: 100, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+          { skinId: 101, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+        ];
+        player2.championId = 2;
+        player2.options = [
+          { skinId: 200, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+          { skinId: 201, chromaId: 0, auraColor: null, skinLineId: 20, skinLineName: 'PROJECT' },
+        ];
+
+        service.recomputeSynergy(room);
+
+        // Add Star Guardian to history
+        service.addSkinLineToHistory(room, 10, 'Star Guardian', []);
+
+        const available = service.getAvailableSkinLineSynergies(room);
+
+        expect(available).toHaveLength(1);
+        expect(available[0].skinLineId).toBe(20);
+        expect(available[0].skinLineName).toBe('PROJECT');
+      });
+    });
+
+    describe('applySkinLineSynergy', () => {
+      it('should apply a specific skin line synergy', () => {
+        const { room, owner, player2 } = setupRoomWithSkinLines();
+
+        const result = service.applySkinLineSynergy(room, 10);
+
+        expect(result).not.toBeNull();
+        expect(result?.skinLineId).toBe(10);
+        expect(result?.skinLineName).toBe('Star Guardian');
+        expect(owner.skinId).toBe(100);
+        expect(owner.chromaId).toBe(0);
+        expect(player2.skinId).toBe(200);
+        expect(player2.chromaId).toBe(0);
+      });
+
+      it('should return null for non-existent skin line synergy', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        const result = service.applySkinLineSynergy(room, 999);
+
+        expect(result).toBeNull();
+      });
+
+      it('should add to skin line history', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        service.applySkinLineSynergy(room, 10);
+
+        expect(room.skinLineHistory).toHaveLength(1);
+        expect(room.skinLineHistory[0].skinLineId).toBe(10);
+      });
+
+      it('should set activeSynergy with type skinLine', () => {
+        const { room } = setupRoomWithSkinLines();
+
+        service.applySkinLineSynergy(room, 10);
+
+        expect(room.activeSynergy?.type).toBe('skinLine');
+        expect(room.activeSynergy?.skinLineId).toBe(10);
+      });
     });
   });
 });

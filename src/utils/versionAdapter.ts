@@ -94,10 +94,13 @@ interface RoomStateData {
   synergy?: SynergyInfo;
   activeSynergy?: {
     type: string;
-    color: string;
+    color?: string;
+    skinLineId?: number;
+    skinLineName?: string;
     timestamp: number;
   };
   activeColor?: string;
+  syncMode?: string; // Story 6.2
 }
 
 export function createRoomStatePayload(
@@ -120,8 +123,10 @@ export function createRoomStatePayload(
 // ============================================
 
 interface GroupApplyComboData {
-  type: "sameColor";
-  color: string;
+  type: "sameColor" | "skinLine";
+  color?: string;
+  skinLineId?: number;
+  skinLineName?: string;
   picks: ComboPick[];
   sourceMemberId?: string;
   autoApplied?: boolean;

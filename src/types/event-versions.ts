@@ -76,6 +76,14 @@ export interface SynergyInfo {
     coverage: number;
     combinationCount: number;
   }>;
+  skinLines: Array<{
+    type: "skinLine";
+    skinLineId: number;
+    skinLineName: string;
+    members: string[];
+    coverage: number;
+    combinationCount: number;
+  }>; // Story 6.2
 }
 
 /**
@@ -89,10 +97,13 @@ export interface RoomStateV1 {
   synergy?: SynergyInfo;
   activeSynergy?: {
     type: string;
-    color: string;
+    color?: string;
+    skinLineId?: number;
+    skinLineName?: string;
     timestamp: number;
   };
   activeColor?: string;
+  syncMode?: string; // Story 6.2
 }
 
 /**
@@ -107,10 +118,13 @@ export interface RoomStateV2 extends VersionedPayload {
   synergy?: SynergyInfo;
   activeSynergy?: {
     type: string;
-    color: string;
+    color?: string;
+    skinLineId?: number;
+    skinLineName?: string;
     timestamp: number;
   };
   activeColor?: string;
+  syncMode?: string; // Story 6.2
 }
 
 export type VersionedRoomStatePayload = RoomStateV1 | RoomStateV2;
@@ -129,8 +143,10 @@ export interface ComboPick {
  * V1 (legacy) - No version field
  */
 export interface GroupApplyComboV1 {
-  type: "sameColor";
-  color: string;
+  type: "sameColor" | "skinLine";
+  color?: string;
+  skinLineId?: number;
+  skinLineName?: string;
   picks: ComboPick[];
   sourceMemberId?: string;
   autoApplied?: boolean;
@@ -141,8 +157,10 @@ export interface GroupApplyComboV1 {
  */
 export interface GroupApplyComboV2 extends VersionedPayload {
   version: 2;
-  type: "sameColor";
-  color: string;
+  type: "sameColor" | "skinLine";
+  color?: string;
+  skinLineId?: number;
+  skinLineName?: string;
   picks: ComboPick[];
   sourceMemberId?: string;
   autoApplied?: boolean;
