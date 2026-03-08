@@ -27,9 +27,7 @@ import type {
   OwnedOptionsPayload,
   RequestGroupRerollPayload,
   SuggestColorPayload,
-  SetSyncModePayload,
   ApplySkinLineSynergyPayload,
-  ApplyCustomComboPayload,
   IdentifyPayload,
   SendRoomInvitePayload,
 } from "./types";
@@ -73,7 +71,7 @@ const socketToMember = new Map<string, { roomId: string; memberId: string }>();
 // Rate limiting for room invitations (Story 4.5)
 // Key: `${senderPuuid}:${targetPuuid}` -> timestamp of last invite
 const inviteRateLimits = new Map<string, number>();
-const INVITE_RATE_LIMIT_MS = 30000; // 30 seconds
+const INVITE_RATE_LIMIT_MS = 10000; // 10 seconds
 const INVITE_CLEANUP_INTERVAL_MS = 300000; // 5 minutes
 
 // Cleanup expired rate limit entries periodically
@@ -381,37 +379,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // --- Set Sync Mode (Story 6.4) ---
-  socket.on("set-sync-mode", safeHandler<SetSyncModePayload>("set-sync-mode", (payload) => {
-    const { roomId, memberId, mode } = payload;
-
-    const room = roomService.getRoom(roomId);
-    if (!room) {
-      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
-    }
-
-    if (room.ownerId !== memberId) {
-      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can change sync mode`, true, {
-        roomId,
-        memberId,
-        ownerId: room.ownerId,
-      });
-    }
-
-    if (!["chromas", "skins", "both"].includes(mode)) {
-      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Invalid sync mode: ${mode}`, true, { mode });
-    }
-
-    room.syncMode = mode;
-    logger.info(`[SyncMode] Room ${room.code}: Mode changed to ${mode} by owner`);
-
-    // Broadcast updated room state
-    const serializedRoom = roomService.serializeRoom(room);
-    emitVersionedToRoom(io, roomId, "room-state", (version) =>
-      createRoomStatePayload(serializedRoom, version)
-    );
-  }));
-
   // --- Apply Skin Line Synergy (Story 6.6) ---
   socket.on("apply-skin-line-synergy", safeHandler<ApplySkinLineSynergyPayload>("apply-skin-line-synergy", (payload) => {
     const { roomId, memberId, skinLineId } = payload;
@@ -443,59 +410,6 @@ io.on("connection", (socket) => {
         skinLineId: result.skinLineId,
         skinLineName: result.skinLineName,
         picks: result.picks,
-        autoApplied: false,
-      }, version)
-    );
-
-    // Broadcast updated room state
-    const serializedRoom = roomService.serializeRoom(room);
-    emitVersionedToRoom(io, roomId, "room-state", (version) =>
-      createRoomStatePayload(serializedRoom, version)
-    );
-  }));
-
-  // --- Apply Custom Combo from Builder (Story 6.7) ---
-  socket.on("apply-custom-combo", safeHandler<ApplyCustomComboPayload>("apply-custom-combo", (payload) => {
-    const { roomId, memberId, picks } = payload;
-
-    const room = roomService.getRoom(roomId);
-    if (!room) {
-      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
-    }
-
-    if (room.ownerId !== memberId) {
-      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can apply custom combo`, true, {
-        roomId,
-        memberId,
-        ownerId: room.ownerId,
-      });
-    }
-
-    if (!Array.isArray(picks) || picks.length === 0) {
-      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Picks array is required`, true, { picks });
-    }
-
-    // Apply picks to each member
-    for (const pick of picks) {
-      const member = room.members.get(pick.memberId);
-      if (member) {
-        member.skinId = pick.skinId;
-        member.chromaId = pick.chromaId;
-      }
-    }
-
-    room.activeSynergy = {
-      type: "custom",
-      timestamp: Date.now(),
-    };
-
-    logger.info(`[Builder] Room ${room.code}: Custom combo applied by owner (${picks.length} picks)`);
-
-    // Broadcast combo
-    emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
-      createGroupApplyComboPayload({
-        type: "sameColor",
-        picks,
         autoApplied: false,
       }, version)
     );
@@ -556,6 +470,17 @@ io.on("connection", (socket) => {
     try {
       const { targetPuuid, roomCode } = payload;
 
+      if (!targetPuuid || typeof targetPuuid !== "string" || targetPuuid.length < 10) {
+        logger.warn("[invite] Invalid targetPuuid received", { targetPuuid });
+        socket.emit("invite-failed", { reason: "invalid_payload" });
+        return;
+      }
+      if (!roomCode || typeof roomCode !== "string") {
+        logger.warn("[invite] Invalid roomCode received", { roomCode });
+        socket.emit("invite-failed", { reason: "invalid_payload" });
+        return;
+      }
+
       // 1. Verify sender is identified
       const senderPuuid = presenceManager.getPuuidBySocketId(socket.id);
       if (!senderPuuid) {
@@ -591,10 +516,9 @@ io.on("connection", (socket) => {
       // 5. Check target is not already in the room
       const room = roomService.getRoomByCode(roomCode);
       if (room) {
-        const targetSocketId = presenceManager.getSocketId(targetPuuid);
-        if (targetSocketId) {
-          const targetMemberInfo = socketToMember.get(targetSocketId);
-          if (targetMemberInfo && targetMemberInfo.roomId === room.id) {
+        // Iterate over room members to see if targetPuuid matches any memberId
+        for (const member of room.members.values()) {
+          if (member.id === targetPuuid) {
             socket.emit("invite-failed", { reason: "already_in_room" });
             logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
             return;

@@ -48,7 +48,6 @@ export class RoomService {
       ownerId,
       members: new Map([[ownerId, owner]]),
       history: [],
-      syncMode: "both",
       skinLineHistory: [],
     };
 
@@ -445,14 +444,11 @@ export class RoomService {
     const allHaveOptions = allMembers.every((m) => m.options && m.options.length > 0);
     if (!allHaveOptions) return false;
 
-    // Must have at least one synergy available (depending on mode)
-    const mode = room.syncMode ?? "both";
+    // Must have at least one synergy available
     const hasColorSynergies = this.getAvailableSynergies(room).length > 0;
     const hasSkinLineSynergies = this.getAvailableSkinLineSynergies(room).length > 0;
 
-    if (mode === "chromas" && !hasColorSynergies) return false;
-    if (mode === "skins" && !hasSkinLineSynergies) return false;
-    if (mode === "both" && !hasSkinLineSynergies && !hasColorSynergies) return false;
+    if (!hasSkinLineSynergies && !hasColorSynergies) return false;
 
     // Don't auto-apply if already applied recently (within last 5 seconds)
     if (room.activeSynergy && Date.now() - room.activeSynergy.timestamp < 5000) {
@@ -462,27 +458,12 @@ export class RoomService {
     return true;
   }
 
-  /**
-   * Select and apply synergy based on room's syncMode.
-   * Returns picks or null if no synergy available.
-   */
   public generateAutoApplyPicks(
     room: Room
   ): { color?: string; skinLineId?: number; skinLineName?: string; picks: Array<{ memberId: string; skinId: number; chromaId: number }> } | null {
-    const mode = room.syncMode ?? "both";
-
-    if (mode === "skins") {
-      return this.generateSkinLinePicks(room);
-    }
-
-    if (mode === "both") {
-      // Try skin line first, fallback to color
-      const skinLineResult = this.generateSkinLinePicks(room);
-      if (skinLineResult) return skinLineResult;
-      return this.generateColorPicks(room);
-    }
-
-    // Mode "chromas" — existing behavior
+    // Try skin line first, fallback to color
+    const skinLineResult = this.generateSkinLinePicks(room);
+    if (skinLineResult) return skinLineResult;
     return this.generateColorPicks(room);
   }
 
@@ -541,7 +522,6 @@ export class RoomService {
       synergy: room.synergy ?? { colors: [], skinLines: [] },
       activeSynergy: room.activeSynergy,
       activeColor: room.activeColor,
-      syncMode: room.syncMode ?? "both",
     };
   }
 

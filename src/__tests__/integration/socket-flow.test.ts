@@ -345,63 +345,7 @@ describe('Socket.io Integration Flow', () => {
     });
   });
 
-  describe('set-sync-mode (Story 6.4)', () => {
-    it('should allow owner to change sync mode and broadcast updated state', (done) => {
-      const clientAddress = `http://localhost:${port}`;
-      clientSocket1 = Client(clientAddress, { forceNew: true });
 
-      clientSocket1.on('connect', () => {
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-      });
-
-      let joinProcessed = false;
-      clientSocket1.on('room-state', (roomState) => {
-        if (!joinProcessed) {
-          joinProcessed = true;
-          // After join, set sync mode
-          clientSocket1.emit('set-sync-mode', {
-            roomId,
-            memberId: member1Id,
-            mode: 'skins',
-          });
-          return;
-        }
-
-        try {
-          expect(roomState.syncMode).toBe('skins');
-          done();
-        } catch (error) {
-          done(error);
-        }
-      });
-    });
-
-    it('should reject set-sync-mode from non-owner', (done) => {
-      const clientAddress = `http://localhost:${port}`;
-      clientSocket2 = Client(clientAddress, { forceNew: true });
-
-      clientSocket2.on('connect', () => {
-        clientSocket2.emit('join-room', { roomId, memberId: member2Id });
-      });
-
-      clientSocket2.on('error', (payload) => {
-        try {
-          expect(payload.code).toBe('UNAUTHORIZED');
-          done();
-        } catch (error) {
-          done(error);
-        }
-      });
-
-      setTimeout(() => {
-        clientSocket2.emit('set-sync-mode', {
-          roomId,
-          memberId: member2Id,
-          mode: 'skins',
-        });
-      }, 500);
-    });
-  });
 
   describe('apply-skin-line-synergy (Story 6.6)', () => {
     it('should apply a skin line synergy and broadcast combo + room state', (done) => {
@@ -494,70 +438,5 @@ describe('Socket.io Integration Flow', () => {
     });
   });
 
-  describe('apply-custom-combo (Story 6.7)', () => {
-    it('should apply custom combo picks and broadcast to room', (done) => {
-      const clientAddress = `http://localhost:${port}`;
-      clientSocket1 = Client(clientAddress, { forceNew: true });
-      clientSocket2 = Client(clientAddress, { forceNew: true });
 
-      let connectedClients = 0;
-      const onConnect = () => {
-        connectedClients++;
-        if (connectedClients === 2) {
-          clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-          clientSocket2.emit('join-room', { roomId, memberId: member2Id });
-        }
-      };
-
-      clientSocket1.on('connect', onConnect);
-      clientSocket2.on('connect', onConnect);
-
-      clientSocket2.on('group-apply-combo', (payload) => {
-        try {
-          expect(payload.picks).toBeDefined();
-          expect(payload.picks).toHaveLength(2);
-          done();
-        } catch (error) {
-          done(error);
-        }
-      });
-
-      setTimeout(() => {
-        clientSocket1.emit('apply-custom-combo', {
-          roomId,
-          memberId: member1Id,
-          picks: [
-            { memberId: member1Id, skinId: 500, chromaId: 0 },
-            { memberId: member2Id, skinId: 600, chromaId: 0 },
-          ],
-        });
-      }, 500);
-    });
-
-    it('should reject apply-custom-combo from non-owner', (done) => {
-      const clientAddress = `http://localhost:${port}`;
-      clientSocket2 = Client(clientAddress, { forceNew: true });
-
-      clientSocket2.on('connect', () => {
-        clientSocket2.emit('join-room', { roomId, memberId: member2Id });
-      });
-
-      clientSocket2.on('error', (payload) => {
-        try {
-          expect(payload.code).toBe('UNAUTHORIZED');
-          done();
-        } catch (error) {
-          done(error);
-        }
-      });
-
-      setTimeout(() => {
-        clientSocket2.emit('apply-custom-combo', {
-          roomId,
-          memberId: member2Id,
-          picks: [{ memberId: member2Id, skinId: 500, chromaId: 0 }],
-        });
-      }, 500);
-    });
-  });
 });

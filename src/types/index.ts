@@ -104,10 +104,7 @@ export type SynergySummary = {
   skinLines: SkinLineSynergy[]; // Story 6.2: skin line synergies
 };
 
-// Story 6.2: Sync mode for room
-export type SyncMode = "chromas" | "skins" | "both";
-
-// Story 6.2: Active synergy applied to the room
+ // Story 6.2: Active synergy applied to the room
 export type ActiveSynergy = {
   type: "sameColor" | "skinLine" | "custom";
   color?: string; // For type "sameColor"
@@ -136,8 +133,7 @@ export type Room = {
   activeColor?: string;
   // Group history - stores recent color combinations to avoid repetition
   history: ChromaCombination[];
-  // Story 6.2: Sync mode and skin line history
-  syncMode: SyncMode;
+  // Story 6.2: skin line history
   skinLineHistory: SkinLineCombination[];
 };
 

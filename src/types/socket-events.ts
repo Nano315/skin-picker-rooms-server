@@ -1,4 +1,4 @@
-import type { GroupSkinOption, SyncMode } from "./index";
+import type { GroupSkinOption } from "./index";
 
 // ============================================
 // Client → Server Events (Incoming Payloads)
@@ -46,25 +46,11 @@ export interface SuggestColorPayload {
   chromaId: number;
 }
 
-// Story 6.4: Set sync mode (owner only)
-export interface SetSyncModePayload {
-  roomId: string;
-  memberId: string;
-  mode: SyncMode;
-}
-
 // Story 6.6: Apply a specific skin line synergy (owner only)
 export interface ApplySkinLineSynergyPayload {
   roomId: string;
   memberId: string;
   skinLineId: number;
-}
-
-// Story 6.7: Apply a custom combo from the builder (owner only)
-export interface ApplyCustomComboPayload {
-  roomId: string;
-  memberId: string;
-  picks: Array<{ memberId: string; skinId: number; chromaId: number }>;
 }
 
 // ============================================
@@ -127,9 +113,7 @@ export interface ClientToServerEvents {
   "owned-options": (payload: OwnedOptionsPayload) => void;
   "request-group-reroll": (payload: RequestGroupRerollPayload) => void;
   "suggest-color": (payload: SuggestColorPayload) => void;
-  "set-sync-mode": (payload: SetSyncModePayload) => void;
   "apply-skin-line-synergy": (payload: ApplySkinLineSynergyPayload) => void;
-  "apply-custom-combo": (payload: ApplyCustomComboPayload) => void;
 }
 
 export interface ServerToClientEvents {
