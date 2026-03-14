@@ -262,7 +262,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload) => {
-    const { roomId, memberId, type, color, sourceMemberId } = payload;
+    const { roomId, memberId, type, color, skinLineId, sourceMemberId } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
@@ -295,7 +295,14 @@ io.on("connection", (socket) => {
     for (const m of room.members.values()) {
       if (!m.isReady) continue;
 
-      const opts = (m.options ?? []).filter((o) => o.auraColor === color);
+      const opts = (m.options ?? []).filter((o) => {
+        let match = o.auraColor === color;
+        if (skinLineId !== undefined) {
+          match = match && o.skinLineId === skinLineId;
+        }
+        return match;
+      });
+
       if (!opts.length) {
         // Keep current
         picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });

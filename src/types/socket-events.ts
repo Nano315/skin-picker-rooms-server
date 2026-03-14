@@ -36,6 +36,7 @@ export interface RequestGroupRerollPayload {
   memberId: string;
   type: "sameColor";
   color: string;
+  skinLineId?: number;
   sourceMemberId?: string;
 }
 
