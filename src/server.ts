@@ -497,11 +497,19 @@ io.on("connection", (socket) => {
       }
 
       // 2. Verify target is a friend of sender (security)
-      const senderFriends = presenceManager.getFriends(senderPuuid);
-      if (!senderFriends || !senderFriends.includes(targetPuuid)) {
-        socket.emit("invite-failed", { reason: "not_friend" });
-        logger.warn(`[invite] ${senderPuuid} tried to invite non-friend ${targetPuuid}`);
-        return;
+      const skipFriendCheck =
+        process.env.NODE_ENV === "development" &&
+        process.env.SKIP_FRIEND_CHECK === "true";
+      if (skipFriendCheck) {
+        logger.warn(`[invite] Friend check bypassed (SKIP_FRIEND_CHECK=true, dev mode)`);
+      }
+      if (!skipFriendCheck) {
+        const senderFriends = presenceManager.getFriends(senderPuuid);
+        if (!senderFriends || !senderFriends.includes(targetPuuid)) {
+          socket.emit("invite-failed", { reason: "not_friend" });
+          logger.warn(`[invite] ${senderPuuid} tried to invite non-friend ${targetPuuid}`);
+          return;
+        }
       }
 
       // 3. Check rate limit
