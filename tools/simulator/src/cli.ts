@@ -1,5 +1,6 @@
 import * as readline from "readline";
 import { FakeClient } from "./fake-client";
+import { searchChampion, ChampionSearchResult } from "./cdragon.service";
 
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
@@ -57,6 +58,54 @@ function cleanupAndExit(): void {
   process.exit(0);
 }
 
+// --- Champion Selection ---
+
+async function askChampion(): Promise<number | null> {
+  const input = await ask(
+    `Champion ${DIM}(nom ou ID, ex: yasuo, 157)${RESET}: `
+  );
+  if (!input) return null;
+
+  // If numeric, treat as ID directly
+  const asId = parseInt(input, 10);
+  if (!isNaN(asId) && asId > 0 && String(asId) === input.trim()) {
+    return asId;
+  }
+
+  // Search by name
+  console.log(`${DIM}Recherche...${RESET}`);
+  const results = await searchChampion(input);
+
+  if (results.length === 0) {
+    console.log(`${YELLOW}Aucun champion trouvé pour "${input}".${RESET}`);
+    return null;
+  }
+
+  // Exact match (score 0) → auto-select
+  if (results[0].score === 0 && results.filter((r) => r.score === 0).length === 1) {
+    const match = results[0];
+    console.log(`${GREEN}→ ${match.name}${RESET} (ID: ${match.id})`);
+    return match.id;
+  }
+
+  // Multiple results → let user pick
+  const shown = results.slice(0, 10);
+  console.log(`\n${BOLD}Résultats :${RESET}`);
+  for (let i = 0; i < shown.length; i++) {
+    console.log(
+      `  ${GREEN}[${i + 1}]${RESET} ${shown[i].name} ${DIM}(ID: ${shown[i].id})${RESET}`
+    );
+  }
+
+  const pick = await ask(`\nNuméro ${DIM}(ou Enter pour annuler)${RESET}: `);
+  const idx = parseInt(pick, 10) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= shown.length) {
+    return null;
+  }
+
+  return shown[idx].id;
+}
+
 // --- Main Menu ---
 
 async function mainMenu(): Promise<void> {
@@ -103,12 +152,8 @@ async function createOwner(): Promise<void> {
   );
   const name = nameInput || defaultName;
 
-  const champInput = await ask("Champion ID (ex: 157 pour Yasuo): ");
-  const championId = parseInt(champInput, 10);
-  if (isNaN(championId) || championId <= 0) {
-    console.log(`${YELLOW}Champion ID invalide.${RESET}`);
-    return;
-  }
+  const championId = await askChampion();
+  if (!championId) return;
 
   const puuid = `fake-puuid-${clientCounter}`;
   clientCounter++;
@@ -167,12 +212,8 @@ async function createGuest(): Promise<void> {
   );
   const name = nameInput || defaultName;
 
-  const champInput = await ask("Champion ID (ex: 157 pour Yasuo): ");
-  const championId = parseInt(champInput, 10);
-  if (isNaN(championId) || championId <= 0) {
-    console.log(`${YELLOW}Champion ID invalide.${RESET}`);
-    return;
-  }
+  const championId = await askChampion();
+  if (!championId) return;
 
   const puuid = `fake-puuid-${clientCounter}`;
   clientCounter++;
