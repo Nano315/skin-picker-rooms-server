@@ -13,8 +13,8 @@
     "simulator": "ts-node --project tools/simulator/tsconfig.json tools/simulator/src/cli.ts"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Valentin Dumas <valentin3135@gmail.com>",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@types/express-rate-limit": "^5.1.3",
