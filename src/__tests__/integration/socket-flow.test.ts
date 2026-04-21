@@ -438,5 +438,119 @@ describe('Socket.io Integration Flow', () => {
     });
   });
 
+  describe('send-room-invite already_in_room check', () => {
+    // Regression: the previous implementation compared Member.id (a random UUID
+    // generated per room membership) against targetPuuid and never matched,
+    // so users could be spammed with invites for rooms they were already in.
+    // The fix resolves the target's current socket via the presence manager
+    // and checks whether that socket is registered as a member of this room.
+
+    it('should emit invite-failed with reason "already_in_room" when the invitee is already in the invited room', (done) => {
+      const clientAddress = `http://localhost:${port}`;
+      clientSocket1 = Client(clientAddress, { forceNew: true }); // inviter (owner)
+      clientSocket2 = Client(clientAddress, { forceNew: true }); // target (already in room)
+
+      // Distinct PUUIDs long enough to pass the server's length validation.
+      const inviterPuuid = 'puuid-inviter-00000000000000000000';
+      const targetPuuid = 'puuid-target-000000000000000000000';
+
+      let connectedClients = 0;
+
+      const onConnect = () => {
+        connectedClients++;
+        if (connectedClients < 2) return;
+
+        // Identify both sockets so invites are routable, and mark them as
+        // mutual friends so the check at step 2 passes.
+        clientSocket1.emit('identify', {
+          puuid: inviterPuuid,
+          summonerName: 'Inviter',
+          friends: [targetPuuid],
+        });
+        clientSocket2.emit('identify', {
+          puuid: targetPuuid,
+          summonerName: 'Target',
+          friends: [inviterPuuid],
+        });
+
+        // Have both sockets join the room so socketToMember is populated.
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
+        clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+      };
+
+      clientSocket1.on('connect', onConnect);
+      clientSocket2.on('connect', onConnect);
+
+      clientSocket1.on('invite-failed', (payload) => {
+        try {
+          expect(payload.reason).toBe('already_in_room');
+          done();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      // Trigger the invite after the joins are processed.
+      setTimeout(() => {
+        clientSocket1.emit('send-room-invite', {
+          targetPuuid,
+          roomCode,
+        });
+      }, 500);
+    });
+
+    it('should emit invite-sent when the invitee is online but not in the invited room', (done) => {
+      const clientAddress = `http://localhost:${port}`;
+      clientSocket1 = Client(clientAddress, { forceNew: true }); // inviter (owner)
+      clientSocket2 = Client(clientAddress, { forceNew: true }); // target (online, no room)
+
+      const inviterPuuid = 'puuid-inviter-11111111111111111111';
+      const targetPuuid = 'puuid-target-111111111111111111111';
+
+      let connectedClients = 0;
+
+      const onConnect = () => {
+        connectedClients++;
+        if (connectedClients < 2) return;
+
+        clientSocket1.emit('identify', {
+          puuid: inviterPuuid,
+          summonerName: 'Inviter',
+          friends: [targetPuuid],
+        });
+        clientSocket2.emit('identify', {
+          puuid: targetPuuid,
+          summonerName: 'Target',
+          friends: [inviterPuuid],
+        });
+
+        // Only the inviter joins the room; the target stays outside.
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
+      };
+
+      clientSocket1.on('connect', onConnect);
+      clientSocket2.on('connect', onConnect);
+
+      clientSocket1.on('invite-failed', (payload) => {
+        done(new Error(`Unexpected invite-failed: ${payload.reason}`));
+      });
+
+      clientSocket1.on('invite-sent', (payload) => {
+        try {
+          expect(payload.targetPuuid).toBe(targetPuuid);
+          done();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      setTimeout(() => {
+        clientSocket1.emit('send-room-invite', {
+          targetPuuid,
+          roomCode,
+        });
+      }, 500);
+    });
+  });
 
 });

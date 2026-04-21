@@ -528,16 +528,19 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // 5. Check target is not already in the room
+      // 5. Check target is not already in the room.
+      //    Member.id is a randomly generated UUID, NOT a PUUID, so we cannot
+      //    compare it directly with targetPuuid. Instead we resolve the target's
+      //    current socket via the presence manager and check whether that socket
+      //    is currently registered as a member of this room.
       const room = roomService.getRoomByCode(roomCode);
       if (room) {
-        // Iterate over room members to see if targetPuuid matches any memberId
-        for (const member of room.members.values()) {
-          if (member.id === targetPuuid) {
-            socket.emit("invite-failed", { reason: "already_in_room" });
-            logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
-            return;
-          }
+        const targetSocketId = presenceManager.getSocketId(targetPuuid);
+        const targetMembership = targetSocketId ? socketToMember.get(targetSocketId) : null;
+        if (targetMembership && targetMembership.roomId === room.id) {
+          socket.emit("invite-failed", { reason: "already_in_room" });
+          logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
+          return;
         }
       }
 
