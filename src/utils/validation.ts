@@ -13,18 +13,35 @@ import type {
  */
 type ValidationResult<T> = { valid: true; payload: T } | { valid: false };
 
+const MAX_ID_LENGTH = 128;
+const MAX_NAME_LENGTH = 128;
+const MAX_ENTITY_ID = 1_000_000_000;
+const MAX_TOKEN_LENGTH = 256;
+
 /**
- * Validates that a value is a non-empty string.
+ * Validates that a value is a non-empty, bounded string.
  */
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function isNonEmptyString(value: unknown, maxLength = MAX_ID_LENGTH): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
 /**
- * Validates that a value is a number (including 0).
+ * Validates that a value is a finite, non-negative integer bounded by max.
  */
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && !Number.isNaN(value);
+function isBoundedInt(value: unknown, max = MAX_ENTITY_ID): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= max
+  );
+}
+
+/**
+ * Validates a memberToken: non-empty bounded string (content verified later with assertMemberAuth).
+ */
+function isMemberToken(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_TOKEN_LENGTH;
 }
 
 /**
@@ -41,12 +58,19 @@ export function validateJoinRoomPayload(
 
   const p = payload as Record<string, unknown>;
 
-  if (!isNonEmptyString(p.roomId) || !isNonEmptyString(p.memberId)) {
-    logger.warn(`[${eventName}] Invalid payload: missing roomId or memberId`);
+  if (
+    !isNonEmptyString(p.roomId) ||
+    !isNonEmptyString(p.memberId) ||
+    !isMemberToken(p.memberToken)
+  ) {
+    logger.warn(`[${eventName}] Invalid payload: missing roomId, memberId or memberToken`);
     return { valid: false };
   }
 
-  return { valid: true, payload: { roomId: p.roomId, memberId: p.memberId } };
+  return {
+    valid: true,
+    payload: { roomId: p.roomId, memberId: p.memberId, memberToken: p.memberToken },
+  };
 }
 
 /**
@@ -76,11 +100,12 @@ export function validateUpdateSelectionPayload(
   if (
     !isNonEmptyString(p.roomId) ||
     !isNonEmptyString(p.memberId) ||
-    !isNumber(p.championId) ||
-    !isNumber(p.skinId) ||
-    !isNumber(p.chromaId)
+    !isMemberToken(p.memberToken) ||
+    !isBoundedInt(p.championId) ||
+    !isBoundedInt(p.skinId) ||
+    !isBoundedInt(p.chromaId)
   ) {
-    logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    logger.warn(`[${eventName}] Invalid payload: missing or out-of-range required fields`);
     return { valid: false };
   }
 
@@ -89,8 +114,12 @@ export function validateUpdateSelectionPayload(
     payload: {
       roomId: p.roomId,
       memberId: p.memberId,
+      memberToken: p.memberToken,
       championId: p.championId,
-      championAlias: typeof p.championAlias === "string" ? p.championAlias : undefined,
+      championAlias:
+        typeof p.championAlias === "string" && p.championAlias.length <= MAX_NAME_LENGTH
+          ? p.championAlias
+          : undefined,
       skinId: p.skinId,
       chromaId: p.chromaId,
     },
@@ -114,10 +143,12 @@ export function validateOwnedOptionsPayload(
   if (
     !isNonEmptyString(p.roomId) ||
     !isNonEmptyString(p.memberId) ||
-    !isNumber(p.championId) ||
-    !Array.isArray(p.options)
+    !isMemberToken(p.memberToken) ||
+    !isBoundedInt(p.championId) ||
+    !Array.isArray(p.options) ||
+    p.options.length > 10_000
   ) {
-    logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    logger.warn(`[${eventName}] Invalid payload: missing or out-of-range required fields`);
     return { valid: false };
   }
 
@@ -126,8 +157,12 @@ export function validateOwnedOptionsPayload(
     payload: {
       roomId: p.roomId,
       memberId: p.memberId,
+      memberToken: p.memberToken,
       championId: p.championId,
-      championAlias: typeof p.championAlias === "string" ? p.championAlias : undefined,
+      championAlias:
+        typeof p.championAlias === "string" && p.championAlias.length <= MAX_NAME_LENGTH
+          ? p.championAlias
+          : undefined,
       options: p.options,
     },
   };
@@ -150,8 +185,9 @@ export function validateRequestGroupRerollPayload(
   if (
     !isNonEmptyString(p.roomId) ||
     !isNonEmptyString(p.memberId) ||
+    !isMemberToken(p.memberToken) ||
     p.type !== "sameColor" ||
-    !isNonEmptyString(p.color)
+    !isNonEmptyString(p.color, 64)
   ) {
     logger.warn(`[${eventName}] Invalid payload: missing required fields`);
     return { valid: false };
@@ -162,6 +198,7 @@ export function validateRequestGroupRerollPayload(
     payload: {
       roomId: p.roomId,
       memberId: p.memberId,
+      memberToken: p.memberToken,
       type: p.type,
       color: p.color,
     },
@@ -185,10 +222,11 @@ export function validateSuggestColorPayload(
   if (
     !isNonEmptyString(p.roomId) ||
     !isNonEmptyString(p.memberId) ||
-    !isNumber(p.skinId) ||
-    !isNumber(p.chromaId)
+    !isMemberToken(p.memberToken) ||
+    !isBoundedInt(p.skinId) ||
+    !isBoundedInt(p.chromaId)
   ) {
-    logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    logger.warn(`[${eventName}] Invalid payload: missing or out-of-range required fields`);
     return { valid: false };
   }
 
@@ -197,6 +235,7 @@ export function validateSuggestColorPayload(
     payload: {
       roomId: p.roomId,
       memberId: p.memberId,
+      memberToken: p.memberToken,
       skinId: p.skinId,
       chromaId: p.chromaId,
     },

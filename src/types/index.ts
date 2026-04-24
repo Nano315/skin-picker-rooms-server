@@ -71,6 +71,10 @@ export type ChromaCombination = {
 export type Member = {
   id: string;
   name: string;
+  // Secret token delivered to the client at create/join time. Required on
+  // every socket action to prevent impersonation when a room code leaks.
+  // NEVER serialized to other room members.
+  token: string;
   championId: number;
   championAlias: string;
   skinId: number;

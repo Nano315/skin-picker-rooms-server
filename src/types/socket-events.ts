@@ -7,16 +7,19 @@ import type { GroupSkinOption } from "./index";
 export interface JoinRoomPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
 }
 
 export interface LeaveRoomPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
 }
 
 export interface UpdateSelectionPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
   championId: number;
   championAlias?: string;
   skinId: number;
@@ -26,6 +29,7 @@ export interface UpdateSelectionPayload {
 export interface OwnedOptionsPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
   championId: number;
   championAlias?: string;
   options: GroupSkinOption[];
@@ -34,6 +38,7 @@ export interface OwnedOptionsPayload {
 export interface RequestGroupRerollPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
   type: "sameColor";
   color: string;
   skinLineId?: number;
@@ -43,6 +48,7 @@ export interface RequestGroupRerollPayload {
 export interface SuggestColorPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
   skinId: number;
   chromaId: number;
 }
@@ -51,6 +57,7 @@ export interface SuggestColorPayload {
 export interface ApplySkinLineSynergyPayload {
   roomId: string;
   memberId: string;
+  memberToken: string;
   skinLineId: number;
 }
 

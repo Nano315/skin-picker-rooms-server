@@ -1,8 +1,26 @@
-import { randomUUID, randomInt } from "crypto";
+import { randomUUID, randomInt, randomBytes, timingSafeEqual } from "crypto";
 import { Room, Member, ColorSynergy, SkinLineSynergy, ChromaCombination, SkinLineCombination, GroupSkinOption } from "../types";
 import { logger } from "../utils/logger";
 
 const GROUP_HISTORY_LIMIT = 3;
+
+function generateMemberToken(): string {
+  return randomBytes(32).toString("hex");
+}
+
+/**
+ * Constant-time comparison of a provided member token with the stored one.
+ * Returns false for any type/length mismatch.
+ */
+export function verifyMemberToken(stored: string, provided: unknown): boolean {
+  if (typeof provided !== "string" || provided.length !== stored.length) {
+    return false;
+  }
+  const a = Buffer.from(stored, "utf8");
+  const b = Buffer.from(provided, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 export class RoomService {
   private static instance: RoomService;
@@ -20,11 +38,18 @@ export class RoomService {
 
   private generateRoomCode(): string {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let code = "";
-    for (let i = 0; i < 6; i++) {
-      code += alphabet[randomInt(0, alphabet.length)];
+    const length = 8;
+    const maxAttempts = 32;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let code = "";
+      for (let i = 0; i < length; i++) {
+        code += alphabet[randomInt(0, alphabet.length)];
+      }
+      if (!this.roomsByCode.has(code)) {
+        return code;
+      }
     }
-    return code;
+    throw new Error("Failed to generate a unique room code after maxAttempts");
   }
 
   public createRoom(ownerName: string): { room: Room; member: Member } {
@@ -35,6 +60,7 @@ export class RoomService {
     const owner: Member = {
       id: ownerId,
       name: ownerName,
+      token: generateMemberToken(),
       championId: 0,
       championAlias: "",
       skinId: 0,
@@ -95,6 +121,7 @@ export class RoomService {
     const member: Member = {
       id: memberId,
       name: memberName,
+      token: generateMemberToken(),
       championId: 0,
       championAlias: "",
       skinId: 0,
@@ -518,7 +545,10 @@ export class RoomService {
       id: room.id,
       code: room.code,
       ownerId: room.ownerId,
-      members: Array.from(room.members.values()),
+      // Strip the per-member secret token before broadcasting to the room.
+      members: Array.from(room.members.values()).map(
+        ({ token: _token, ...publicMember }) => publicMember
+      ),
       synergy: room.synergy ?? { colors: [], skinLines: [] },
       activeSynergy: room.activeSynergy,
       activeColor: room.activeColor,
@@ -533,11 +563,29 @@ export class RoomService {
 
     const namePrefix = config.namePrefix || "Bot";
 
+    // Pick a starting index that avoids collision with any existing
+    // "<prefix> <n>" member name (including bots from prior addBots calls
+    // that may have been filled and partially vacated).
+    const takenSuffixes = new Set<number>();
+    const prefixMatch = new RegExp(
+      `^${namePrefix.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} (\\d+)$`
+    );
+    for (const m of room.members.values()) {
+      const match = prefixMatch.exec(m.name);
+      if (match) takenSuffixes.add(parseInt(match[1], 10));
+    }
+
+    let nextSuffix = 1;
     for (let i = 0; i < toAdd; i++) {
+        while (takenSuffixes.has(nextSuffix)) nextSuffix++;
+        takenSuffixes.add(nextSuffix);
+
         const memberId = randomUUID();
         const bot: Member = {
             id: memberId,
-            name: `${namePrefix} ${room.members.size + 1}`,
+            name: `${namePrefix} ${nextSuffix}`,
+            // Bots have a token for type uniformity but never connect via socket.
+            token: generateMemberToken(),
             championId: config.championId ?? randomInt(1, 201),
             championAlias: "",
             skinId: config.skinId ?? randomInt(1000, 999999),
@@ -548,7 +596,7 @@ export class RoomService {
         room.members.set(memberId, bot);
         createdBots.push(bot);
     }
-    
+
     this.recomputeSynergy(room);
     return createdBots;
   }

@@ -1,8 +1,30 @@
 import type { Socket } from "socket.io";
 import type { Room, Member } from "../types";
-import { RoomService } from "../services/room.service";
+import { RoomService, verifyMemberToken } from "../services/room.service";
 import { logger } from "./logger";
 import { AppError, formatErrorResponse, ErrorCodes } from "./errors";
+
+/**
+ * Throws AppError(UNAUTHORIZED) if the provided token does not match the
+ * member's stored secret. Use on every socket action that manipulates a member.
+ */
+export function assertMemberAuth(
+  member: Member,
+  providedToken: unknown,
+  eventName: string
+): void {
+  if (!verifyMemberToken(member.token, providedToken)) {
+    logger.warn(
+      `[${eventName}] Rejected action: invalid memberToken for member ${member.id}`
+    );
+    throw new AppError(
+      ErrorCodes.UNAUTHORIZED,
+      "Invalid member token",
+      true,
+      { memberId: member.id }
+    );
+  }
+}
 
 /**
  * Gets a room by ID, logging a warning if not found.

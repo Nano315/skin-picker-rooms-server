@@ -155,7 +155,8 @@ async function createOwner(): Promise<void> {
   const championId = await askChampion();
   if (!championId) return;
 
-  const puuid = `fake-puuid-${clientCounter}`;
+  // Puuid must match /^[A-Za-z0-9_-]{16,128}$/ on the server
+  const puuid = `fake-puuid-${String(clientCounter).padStart(20, "0")}`;
   clientCounter++;
 
   // Ask for real player PUUID to invite (optional)
@@ -215,7 +216,8 @@ async function createGuest(): Promise<void> {
   const championId = await askChampion();
   if (!championId) return;
 
-  const puuid = `fake-puuid-${clientCounter}`;
+  // Puuid must match /^[A-Za-z0-9_-]{16,128}$/ on the server
+  const puuid = `fake-puuid-${String(clientCounter).padStart(20, "0")}`;
   clientCounter++;
 
   const client = new FakeClient(puuid, name, "guest", [], logEvent);

@@ -16,6 +16,8 @@ describe('Socket.io Integration Flow', () => {
   let roomId: string;
   let member1Id: string;
   let member2Id: string;
+  let member1Token: string;
+  let member2Token: string;
 
   beforeAll((done) => {
     server = httpServer.listen(0, () => {
@@ -47,6 +49,7 @@ describe('Socket.io Integration Flow', () => {
     roomCode = createRes.body.room.code;
     roomId = createRes.body.room.id;
     member1Id = createRes.body.memberId;
+    member1Token = createRes.body.memberToken;
 
     // 2. Join the room via HTTP
     const joinRes = await request(httpServer)
@@ -55,6 +58,7 @@ describe('Socket.io Integration Flow', () => {
 
     expect(joinRes.status).toBe(200);
     member2Id = joinRes.body.memberId;
+    member2Token = joinRes.body.memberToken;
   });
 
   afterEach(() => {
@@ -75,8 +79,8 @@ describe('Socket.io Integration Flow', () => {
         connectedClients++;
         if (connectedClients === 2) {
             // Both clients are connected, now join rooms
-            clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-            clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+            clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+            clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
         }
     };
 
@@ -105,6 +109,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('update-selection', {
             roomId,
             memberId: member1Id,
+            memberToken: member1Token,
             skinId: 123,
             chromaId: 456,
         });
@@ -122,8 +127,8 @@ describe('Socket.io Integration Flow', () => {
     const onConnect = () => {
         connectedClients++;
         if (connectedClients === 2) {
-            clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-            clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+            clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+            clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
         }
     };
 
@@ -152,12 +157,14 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('update-selection', {
             roomId,
             memberId: member1Id,
+            memberToken: member1Token,
             skinId: 111,
             chromaId: 1111,
         });
         clientSocket2.emit('update-selection', {
             roomId,
             memberId: member2Id,
+            memberToken: member2Token,
             skinId: 222,
             chromaId: 2222,
         });
@@ -176,8 +183,8 @@ describe('Socket.io Integration Flow', () => {
       connectedClients++;
       if (connectedClients === 2) {
         // Both connected, have them join the room
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-        clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+        clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
 
         // After joining, disconnect player2 and have them rejoin via HTTP then socket
         setTimeout(() => {
@@ -192,11 +199,12 @@ describe('Socket.io Integration Flow', () => {
 
             expect(joinRes.status).toBe(200);
             const newMemberId = joinRes.body.memberId;
+            const newMemberToken = joinRes.body.memberToken;
 
             // Connect with new socket and join
             clientSocket2 = Client(clientAddress, { forceNew: true });
             clientSocket2.on('connect', () => {
-              clientSocket2.emit('join-room', { roomId, memberId: newMemberId });
+              clientSocket2.emit('join-room', { roomId, memberId: newMemberId, memberToken: newMemberToken });
             });
 
             clientSocket2.on('room-state', (roomState) => {
@@ -231,8 +239,8 @@ describe('Socket.io Integration Flow', () => {
       const onConnect = () => {
         connectedClients++;
         if (connectedClients === 2) {
-          clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-          clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
         }
       };
 
@@ -258,6 +266,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket2.emit('suggest-color', {
           roomId,
           memberId: member2Id,
+          memberToken: member2Token,
           skinId: 1001,
           chromaId: 1001001,
         });
@@ -269,7 +278,7 @@ describe('Socket.io Integration Flow', () => {
       clientSocket1 = Client(clientAddress, { forceNew: true }); // Owner
 
       clientSocket1.on('connect', () => {
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
       });
 
       // Owner listens for color suggestions (including their own)
@@ -290,6 +299,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('suggest-color', {
           roomId,
           memberId: member1Id,
+          memberToken: member1Token,
           skinId: 2002,
           chromaId: 2002002,
         });
@@ -306,8 +316,8 @@ describe('Socket.io Integration Flow', () => {
       const onConnect = () => {
         connectedClients++;
         if (connectedClients === 2) {
-          clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-          clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
         }
       };
 
@@ -338,6 +348,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket2.emit('suggest-color', {
           roomId,
           memberId: member2Id,
+          memberToken: member2Token,
           skinId: 999,
           chromaId: 9999,
         });
@@ -359,8 +370,8 @@ describe('Socket.io Integration Flow', () => {
       const onConnect = () => {
         connectedClients++;
         if (connectedClients === 2) {
-          clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-          clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
         }
       };
 
@@ -372,6 +383,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('owned-options', {
           roomId,
           memberId: member1Id,
+          memberToken: member1Token,
           championId: 1,
           championAlias: 'Ahri',
           options: [
@@ -381,6 +393,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket2.emit('owned-options', {
           roomId,
           memberId: member2Id,
+          memberToken: member2Token,
           championId: 2,
           championAlias: 'Lux',
           options: [
@@ -395,6 +408,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('apply-skin-line-synergy', {
           roomId,
           memberId: member1Id,
+          memberToken: member1Token,
           skinLineId: 10,
         });
       }, 2000);
@@ -416,7 +430,7 @@ describe('Socket.io Integration Flow', () => {
       clientSocket1 = Client(clientAddress, { forceNew: true });
 
       clientSocket1.on('connect', () => {
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
       });
 
       clientSocket1.on('error', (payload) => {
@@ -432,6 +446,7 @@ describe('Socket.io Integration Flow', () => {
         clientSocket1.emit('apply-skin-line-synergy', {
           roomId,
           memberId: member1Id,
+          memberToken: member1Token,
           skinLineId: 99999,
         });
       }, 500);
@@ -474,8 +489,8 @@ describe('Socket.io Integration Flow', () => {
         });
 
         // Have both sockets join the room so socketToMember is populated.
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
-        clientSocket2.emit('join-room', { roomId, memberId: member2Id });
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+        clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
       };
 
       clientSocket1.on('connect', onConnect);
@@ -525,7 +540,7 @@ describe('Socket.io Integration Flow', () => {
         });
 
         // Only the inviter joins the room; the target stays outside.
-        clientSocket1.emit('join-room', { roomId, memberId: member1Id });
+        clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
       };
 
       clientSocket1.on('connect', onConnect);

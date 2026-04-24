@@ -5,7 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { logger } from "./utils/logger";
-import { createSafeHandler } from "./utils/socketHelpers";
+import { createSafeHandler, assertMemberAuth } from "./utils/socketHelpers";
 import { AppError, ErrorCodes } from "./utils/errors";
 import {
   registerClientVersion,
@@ -37,21 +37,73 @@ const app = express();
 const roomService = RoomService.getInstance();
 
 // --- Configuration & Middleware ---
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter((o) => o.length > 0);
+if (process.env.NODE_ENV !== "production") {
+  allowedOrigins.push("http://localhost:5173", "http://127.0.0.1:5173");
+}
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Requests with no Origin header (Electron file://, curl, server-to-server) are allowed.
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    logger.warn(`[cors] Rejected origin: ${origin}`);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+  credentials: false,
+};
+
 app.use(helmet());
-app.use(cors()); // Configure origin in production
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Rate limiting
+// Rate limiting — disabled in tests to avoid flakiness when running many requests in sequence.
+const RATE_LIMIT_DISABLED = process.env.NODE_ENV === "test" || process.env.DISABLE_RATE_LIMIT === "true";
+
+// Global baseline applied to every route, keyed by client IP.
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 100, 
-  standardHeaders: true, 
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
   legacyHeaders: false,
+  skip: () => RATE_LIMIT_DISABLED,
 });
 app.use(limiter);
 
+// Stricter per-IP limit on room creation to prevent spam.
+const createRoomLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many rooms created, try again later" },
+  skip: () => RATE_LIMIT_DISABLED,
+});
+
+// Stricter per-IP limit on room join to prevent brute-forcing room codes.
+const joinRoomLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many join attempts, try again later" },
+  skip: () => RATE_LIMIT_DISABLED,
+});
+
 // --- Routes ---
-app.use("/rooms", roomRoutes);
+app.use("/rooms", (req, res, next) => {
+  if (req.method === "POST" && req.path === "/") return createRoomLimiter(req, res, next);
+  if (req.method === "POST" && req.path === "/bot") return createRoomLimiter(req, res, next);
+  if (req.method === "POST" && req.path === "/join") return joinRoomLimiter(req, res, next);
+  return next();
+}, roomRoutes);
 
 app.get("/", (req, res) => {
   res.send("Skin Picker Rooms server is running");
@@ -60,10 +112,28 @@ app.get("/", (req, res) => {
 // --- Server Setup ---
 export const httpServer = http.createServer(app);
 export const io = new SocketIOServer(httpServer, {
-  cors: { origin: "*" },
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      logger.warn(`[socket.io/cors] Rejected origin: ${origin}`);
+      return callback(new Error("Origin not allowed by CORS"));
+    },
+    credentials: false,
+  },
 });
 
 // --- Socket.io Logic ---
+
+// Validate a Riot-style PUUID. Real encrypted PUUIDs are 78 URL-safe base64
+// characters, but simulator fixtures and legacy test traffic can be shorter,
+// so we accept a bounded range with a strict character class. The old check
+// (`length < 10`) let "abcdefghij" through.
+const PUUID_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
+function isValidPuuid(value: unknown): value is string {
+  return typeof value === "string" && PUUID_REGEX.test(value);
+}
 
 // Map socketId -> { roomId, memberId }
 const socketToMember = new Map<string, { roomId: string; memberId: string }>();
@@ -115,7 +185,7 @@ io.on("connection", (socket) => {
 
   const safeHandler = createSafeHandler(socket);
 
-  socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId }) => {
+  socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId, memberToken }) => {
     const room = roomService.getRoom(roomId);
     if (!room) {
       throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -125,6 +195,8 @@ io.on("connection", (socket) => {
     if (!member) {
       throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
     }
+
+    assertMemberAuth(member, memberToken, "join-room");
 
     logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
 
@@ -139,7 +211,7 @@ io.on("connection", (socket) => {
   }));
 
   socket.on("update-selection", safeHandler<UpdateSelectionPayload>("update-selection", (payload) => {
-    const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
+    const { roomId, memberId, memberToken, championId, championAlias, skinId, chromaId } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
@@ -149,6 +221,16 @@ io.on("connection", (socket) => {
     const member = room.members.get(memberId);
     if (!member) {
       throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+
+    assertMemberAuth(member, memberToken, "update-selection");
+
+    // When the member switches champion, their previously-uploaded skin/chroma
+    // options belong to the old champion and must not participate in synergy
+    // calculations until the client resends owned-options for the new champion.
+    if (member.championId !== championId) {
+      member.options = [];
+      member.isReady = false;
     }
 
     member.championId = championId;
@@ -164,7 +246,7 @@ io.on("connection", (socket) => {
   }));
 
   socket.on("owned-options", safeHandler<OwnedOptionsPayload>("owned-options", (payload) => {
-    const { roomId, memberId, championId, championAlias, options } = payload;
+    const { roomId, memberId, memberToken, championId, championAlias, options } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
@@ -175,6 +257,8 @@ io.on("connection", (socket) => {
     if (!member) {
       throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
     }
+
+    assertMemberAuth(member, memberToken, "owned-options");
 
     member.championId = championId;
     member.championAlias = championAlias ?? "";
@@ -220,7 +304,17 @@ io.on("connection", (socket) => {
     );
   }));
 
-  socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId }) => {
+  socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId, memberToken }) => {
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+    assertMemberAuth(member, memberToken, "leave-room");
+
     logger.debug(`[leave-room] ${socket.id} explicit leave room ${roomId}`);
 
     handleMemberLeave(roomId, memberId, "leave");
@@ -262,12 +356,18 @@ io.on("connection", (socket) => {
   });
 
   socket.on("request-group-reroll", safeHandler<RequestGroupRerollPayload>("request-group-reroll", (payload) => {
-    const { roomId, memberId, type, color, skinLineId, sourceMemberId } = payload;
+    const { roomId, memberId, memberToken, type, color, skinLineId, sourceMemberId } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
       throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
     }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+    assertMemberAuth(member, memberToken, "request-group-reroll");
 
     if (room.ownerId !== memberId) {
       throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can trigger group reroll`, true, {
@@ -342,7 +442,44 @@ io.on("connection", (socket) => {
 
   socket.on("suggest-color", (payload: SuggestColorPayload, ack?: (response: { success: boolean; error?: string }) => void) => {
     try {
-      const { roomId, memberId, skinId, chromaId } = payload;
+      if (!payload || typeof payload !== "object") {
+        logger.warn(`[suggest-color] Rejected: payload is not an object`);
+        if (ack) ack({ success: false, error: 'Invalid payload' });
+        return;
+      }
+
+      const { roomId, memberId, memberToken, skinId, chromaId } = payload;
+
+      if (typeof roomId !== "string" || roomId.length === 0 || roomId.length > 128) {
+        logger.warn(`[suggest-color] Rejected: invalid roomId`);
+        if (ack) ack({ success: false, error: 'Invalid roomId' });
+        return;
+      }
+      if (typeof memberId !== "string" || memberId.length === 0 || memberId.length > 128) {
+        logger.warn(`[suggest-color] Rejected: invalid memberId`);
+        if (ack) ack({ success: false, error: 'Invalid memberId' });
+        return;
+      }
+      if (
+        typeof skinId !== "number" ||
+        !Number.isInteger(skinId) ||
+        skinId < 0 ||
+        skinId > 1_000_000_000
+      ) {
+        logger.warn(`[suggest-color] Rejected: invalid skinId (${String(skinId)})`);
+        if (ack) ack({ success: false, error: 'Invalid skinId' });
+        return;
+      }
+      if (
+        typeof chromaId !== "number" ||
+        !Number.isInteger(chromaId) ||
+        chromaId < 0 ||
+        chromaId > 1_000_000_000
+      ) {
+        logger.warn(`[suggest-color] Rejected: invalid chromaId (${String(chromaId)})`);
+        if (ack) ack({ success: false, error: 'Invalid chromaId' });
+        return;
+      }
 
       logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
 
@@ -357,6 +494,13 @@ io.on("connection", (socket) => {
       if (!sender) {
         logger.warn(`[suggest-color] Member ${memberId} not found in room ${roomId}`);
         if (ack) ack({ success: false, error: 'Member not found' });
+        return;
+      }
+
+      try {
+        assertMemberAuth(sender, memberToken, "suggest-color");
+      } catch {
+        if (ack) ack({ success: false, error: 'Unauthorized' });
         return;
       }
 
@@ -388,12 +532,18 @@ io.on("connection", (socket) => {
 
   // --- Apply Skin Line Synergy (Story 6.6) ---
   socket.on("apply-skin-line-synergy", safeHandler<ApplySkinLineSynergyPayload>("apply-skin-line-synergy", (payload) => {
-    const { roomId, memberId, skinLineId } = payload;
+    const { roomId, memberId, memberToken, skinLineId } = payload;
 
     const room = roomService.getRoom(roomId);
     if (!room) {
       throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
     }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+    assertMemberAuth(member, memberToken, "apply-skin-line-synergy");
 
     if (room.ownerId !== memberId) {
       throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can apply skin line synergy`, true, {
@@ -434,39 +584,49 @@ io.on("connection", (socket) => {
       const { puuid, summonerName, friends } = payload;
 
       // Validate payload
-      if (!puuid || typeof puuid !== "string" || puuid.length < 10) {
+      if (!isValidPuuid(puuid)) {
         logger.warn("[identify] Invalid puuid received", { puuid });
         return;
       }
-      if (!summonerName || typeof summonerName !== "string") {
+      if (
+        typeof summonerName !== "string" ||
+        summonerName.length === 0 ||
+        summonerName.length > 128
+      ) {
         logger.warn("[identify] Invalid summonerName received", { summonerName });
         return;
       }
-      if (!Array.isArray(friends)) {
+      if (!Array.isArray(friends) || friends.length > 1000) {
         logger.warn("[identify] Invalid friends array received");
         return;
       }
+      // Drop malformed entries rather than trusting every string in the array.
+      const validFriends = friends.filter(isValidPuuid);
 
-      // 1. Register presence
-      presenceManager.identify(socket, puuid, summonerName);
+      // 1. Register presence (fails if PUUID already claimed by another socket)
+      const result = presenceManager.identify(socket, puuid, summonerName);
+      if (!result.ok) {
+        socket.emit("identity-rejected", { reason: result.reason });
+        return;
+      }
 
       // 2. Store friends list
-      presenceManager.setFriends(puuid, friends);
+      presenceManager.setFriends(puuid, validFriends);
 
       // 3. Find online friends
-      const onlineFriends = presenceManager.getOnlineFriends(friends);
+      const onlineFriends = presenceManager.getOnlineFriends(validFriends);
 
       // 4. Confirm to client
       socket.emit("identity-confirmed", { onlineFriends });
 
       // 5. Notify friends that this user is online
-      for (const friendPuuid of friends) {
+      for (const friendPuuid of validFriends) {
         if (presenceManager.isOnline(friendPuuid)) {
           io.to(`user:${friendPuuid}`).emit("friend-online", { puuid, summonerName });
         }
       }
 
-      logger.info(`[identify] ${summonerName} (${puuid}) identified with ${friends.length} friends, ${onlineFriends.length} online`);
+      logger.info(`[identify] ${summonerName} (${puuid}) identified with ${validFriends.length} friends, ${onlineFriends.length} online`);
     } catch (err) {
       logger.error("[identify] Error processing identify", err);
     }
@@ -477,12 +637,16 @@ io.on("connection", (socket) => {
     try {
       const { targetPuuid, roomCode } = payload;
 
-      if (!targetPuuid || typeof targetPuuid !== "string" || targetPuuid.length < 10) {
+      if (!isValidPuuid(targetPuuid)) {
         logger.warn("[invite] Invalid targetPuuid received", { targetPuuid });
         socket.emit("invite-failed", { reason: "invalid_payload" });
         return;
       }
-      if (!roomCode || typeof roomCode !== "string") {
+      if (
+        typeof roomCode !== "string" ||
+        roomCode.length === 0 ||
+        roomCode.length > 32
+      ) {
         logger.warn("[invite] Invalid roomCode received", { roomCode });
         socket.emit("invite-failed", { reason: "invalid_payload" });
         return;
@@ -497,19 +661,11 @@ io.on("connection", (socket) => {
       }
 
       // 2. Verify target is a friend of sender (security)
-      const skipFriendCheck =
-        process.env.NODE_ENV === "development" &&
-        process.env.SKIP_FRIEND_CHECK === "true";
-      if (skipFriendCheck) {
-        logger.warn(`[invite] Friend check bypassed (SKIP_FRIEND_CHECK=true, dev mode)`);
-      }
-      if (!skipFriendCheck) {
-        const senderFriends = presenceManager.getFriends(senderPuuid);
-        if (!senderFriends || !senderFriends.includes(targetPuuid)) {
-          socket.emit("invite-failed", { reason: "not_friend" });
-          logger.warn(`[invite] ${senderPuuid} tried to invite non-friend ${targetPuuid}`);
-          return;
-        }
+      const senderFriends = presenceManager.getFriends(senderPuuid);
+      if (!senderFriends || !senderFriends.includes(targetPuuid)) {
+        socket.emit("invite-failed", { reason: "not_friend" });
+        logger.warn(`[invite] ${senderPuuid} tried to invite non-friend ${targetPuuid}`);
+        return;
       }
 
       // 3. Check rate limit

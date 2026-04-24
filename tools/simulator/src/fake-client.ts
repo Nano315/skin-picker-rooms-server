@@ -26,6 +26,7 @@ export class FakeClient {
   roomSocket: Socket | null = null;
   identitySocket: Socket | null = null;
   memberId: string = "";
+  memberToken: string = "";
   roomId: string = "";
   roomCode: string = "";
   championId: number = 0;
@@ -228,11 +229,13 @@ export class FakeClient {
       roomId: string;
       code: string;
       memberId: string;
+      memberToken: string;
     };
 
     this.roomId = data.roomId;
     this.roomCode = data.code;
     this.memberId = data.memberId;
+    this.memberToken = data.memberToken;
 
     this.log(`${this.prefix()} Room créée — code: ${this.color}${this.roomCode}${RESET}`);
 
@@ -240,6 +243,7 @@ export class FakeClient {
     this.requireRoomSocket().emit("join-room", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
     });
   }
 
@@ -261,6 +265,7 @@ export class FakeClient {
     this.roomSocket.emit("apply-skin-line-synergy", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
       skinLineId,
     });
   }
@@ -275,6 +280,7 @@ export class FakeClient {
     this.roomSocket.emit("request-group-reroll", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
       type,
       color,
       skinLineId,
@@ -301,11 +307,13 @@ export class FakeClient {
       roomId: string;
       code: string;
       memberId: string;
+      memberToken: string;
     };
 
     this.roomId = data.roomId;
     this.roomCode = data.code;
     this.memberId = data.memberId;
+    this.memberToken = data.memberToken;
 
     this.log(`${this.prefix()} Room rejointe — code: ${this.roomCode}`);
 
@@ -313,6 +321,7 @@ export class FakeClient {
     this.requireRoomSocket().emit("join-room", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
     });
   }
 
@@ -336,6 +345,7 @@ export class FakeClient {
     this.requireRoomSocket().emit("update-selection", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
       championId: this.championId,
       championAlias: this.championAlias,
       skinId: defaultSkinId,
@@ -359,6 +369,7 @@ export class FakeClient {
     this.requireRoomSocket().emit("owned-options", {
       roomId: this.roomId,
       memberId: this.memberId,
+      memberToken: this.memberToken,
       championId: this.championId,
       championAlias: this.championAlias,
       options: this.options,
@@ -373,6 +384,7 @@ export class FakeClient {
       {
         roomId: this.roomId,
         memberId: this.memberId,
+        memberToken: this.memberToken,
         skinId,
         chromaId,
       },

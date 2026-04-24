@@ -12,10 +12,10 @@ describe('RoomService', () => {
   });
 
   describe('createRoom', () => {
-    it('should create a room with a valid 6-character alphanumeric code', () => {
+    it('should create a room with a valid 8-character alphanumeric code', () => {
       const { room } = service.createRoom('TestOwner');
       expect(room).toBeDefined();
-      expect(room.code).toMatch(/^[A-Z0-9]{6}$/);
+      expect(room.code).toMatch(/^[A-Z0-9]{8}$/);
     });
 
     it('should create a room with one member, who is the owner', () => {
@@ -157,7 +157,7 @@ describe('RoomService', () => {
       const { room, member } = service.createBotRoom();
 
       expect(room).toBeDefined();
-      expect(room.code).toMatch(/^[A-Z0-9]{6}$/);
+      expect(room.code).toMatch(/^[A-Z0-9]{8}$/);
       expect(member.name).toBe('Bot Owner');
       expect(member.isReady).toBe(true);
       expect(member.championId).toBeGreaterThan(0);
@@ -174,8 +174,11 @@ describe('RoomService', () => {
 
       expect(bots).toHaveLength(2);
       expect(room.members.size).toBe(3);
-      expect(bots[0].name).toBe('TestBot 2'); // First bot is added when room has 1 member
-      expect(bots[1].name).toBe('TestBot 3');
+      // Bot suffixes are derived from existing bots with the same prefix,
+      // not from total member count. No "TestBot N" exists yet so numbering
+      // starts at 1.
+      expect(bots[0].name).toBe('TestBot 1');
+      expect(bots[1].name).toBe('TestBot 2');
       expect(bots[0].isReady).toBe(true);
     });
 

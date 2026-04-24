@@ -25,17 +25,26 @@ class PresenceManager {
   private friendsMap = new Map<string, string[]>();
 
   /**
-   * Register a user's presence after identity verification
-   * @param socket - The socket instance
-   * @param puuid - The user's PUUID
-   * @param summonerName - The user's summoner name
+   * Register a user's presence after identity verification.
+   * Rejette si un autre socket est deja identifie sur ce PUUID, afin d'empecher
+   * l'usurpation d'identite (un attaquant pouvant se faire passer pour la
+   * victime et intercepter ses invitations).
+   * @returns `{ ok: true }` en cas de succes, `{ ok: false, reason }` sinon.
    */
-  identify(socket: Socket, puuid: string, summonerName: string): void {
-    // Clean up any existing connection for this PUUID (reconnection case)
+  identify(
+    socket: Socket,
+    puuid: string,
+    summonerName: string
+  ): { ok: true } | { ok: false; reason: "puuid_taken" } {
     const existingInfo = this.connections.get(puuid);
-    if (existingInfo) {
-      this.socketToPuuid.delete(existingInfo.socketId);
-      logger.debug(`[presence] Replaced existing connection for ${puuid}`);
+    if (existingInfo && existingInfo.socketId !== socket.id) {
+      // Socket.io emet `disconnect` quand une connexion meurt, ce qui nettoie
+      // la map. Donc arriver ici = soit double identify du meme client (bug),
+      // soit une autre machine tente d'usurper le PUUID.
+      logger.warn(
+        `[presence] Rejected identify from socket ${socket.id}: PUUID ${puuid} already claimed by socket ${existingInfo.socketId}`
+      );
+      return { ok: false, reason: "puuid_taken" };
     }
 
     this.connections.set(puuid, {
@@ -49,6 +58,7 @@ class PresenceManager {
     socket.join(`user:${puuid}`);
 
     logger.info(`[presence] ${summonerName} (${puuid}) identified`);
+    return { ok: true };
   }
 
   /**

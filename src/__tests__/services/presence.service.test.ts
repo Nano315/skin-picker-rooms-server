@@ -21,26 +21,41 @@ describe("PresenceManager", () => {
     it("should track user after identify", () => {
       const mockSocket = createMockSocket("socket-1");
 
-      presenceManager.identify(mockSocket as any, "puuid-123", "Player1");
+      const result = presenceManager.identify(mockSocket as any, "puuid-123", "Player1");
 
+      expect(result).toEqual({ ok: true });
       expect(presenceManager.isOnline("puuid-123")).toBe(true);
       expect(presenceManager.getSummonerName("puuid-123")).toBe("Player1");
       expect(presenceManager.getSocketId("puuid-123")).toBe("socket-1");
       expect(mockSocket.join).toHaveBeenCalledWith("user:puuid-123");
     });
 
-    it("should replace existing connection on re-identify", () => {
+    it("should reject re-identify from a different socket (anti-spoof)", () => {
       const mockSocket1 = createMockSocket("socket-1");
       const mockSocket2 = createMockSocket("socket-2");
 
-      presenceManager.identify(mockSocket1 as any, "puuid-123", "Player1");
-      presenceManager.identify(mockSocket2 as any, "puuid-123", "Player1-Reconnected");
+      const first = presenceManager.identify(mockSocket1 as any, "puuid-123", "Player1");
+      const second = presenceManager.identify(mockSocket2 as any, "puuid-123", "Attacker");
 
-      expect(presenceManager.isOnline("puuid-123")).toBe(true);
-      expect(presenceManager.getSocketId("puuid-123")).toBe("socket-2");
-      expect(presenceManager.getSummonerName("puuid-123")).toBe("Player1-Reconnected");
-      // Old socket should be removed from reverse lookup
-      expect(presenceManager.getPuuidBySocketId("socket-1")).toBeNull();
+      expect(first).toEqual({ ok: true });
+      expect(second).toEqual({ ok: false, reason: "puuid_taken" });
+
+      // Original owner kept
+      expect(presenceManager.getSocketId("puuid-123")).toBe("socket-1");
+      expect(presenceManager.getSummonerName("puuid-123")).toBe("Player1");
+      // Attacker socket not registered
+      expect(presenceManager.getPuuidBySocketId("socket-2")).toBeNull();
+      expect(mockSocket2.join).not.toHaveBeenCalled();
+    });
+
+    it("should be idempotent on identify from the same socket", () => {
+      const mockSocket = createMockSocket("socket-1");
+
+      presenceManager.identify(mockSocket as any, "puuid-123", "Player1");
+      const second = presenceManager.identify(mockSocket as any, "puuid-123", "Player1");
+
+      expect(second).toEqual({ ok: true });
+      expect(presenceManager.getSocketId("puuid-123")).toBe("socket-1");
     });
   });
 
