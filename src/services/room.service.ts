@@ -66,6 +66,7 @@ export class RoomService {
       skinId: 0,
       chromaId: 0,
       isReady: false,
+      lockedSkin: false,
     };
 
     const room: Room = {
@@ -127,6 +128,7 @@ export class RoomService {
       skinId: 0,
       chromaId: 0,
       isReady: false,
+      lockedSkin: false,
     };
 
     room.members.set(memberId, member);
@@ -134,6 +136,19 @@ export class RoomService {
     
     logger.info(`Member ${memberName} (${memberId}) joined room ${room.id}`);
     return { room, member };
+  }
+
+  /**
+   * Set a member's per-match skin lock. Returns true if the value changed,
+   * false if the member doesn't exist or the value is already what's set.
+   */
+  public setMemberSkinLock(room: Room, memberId: string, locked: boolean): boolean {
+    const member = room.members.get(memberId);
+    if (!member) return false;
+    const next = !!locked;
+    if (member.lockedSkin === next) return false;
+    member.lockedSkin = next;
+    return true;
   }
 
   public removeMember(room: Room, memberId: string): { roomClosed: boolean; reason?: string } {
@@ -373,6 +388,10 @@ export class RoomService {
     const picks: Array<{ memberId: string; skinId: number; chromaId: number }> = [];
 
     for (const member of room.members.values()) {
+      if (member.lockedSkin) {
+        picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+        continue;
+      }
       if (!member.options || member.options.length === 0) {
         picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
         continue;
@@ -408,6 +427,65 @@ export class RoomService {
   }
 
   /**
+   * Apply a specific color synergy (owner-triggered via `request-group-reroll`).
+   * Mirror of `applySkinLineSynergy` for the color path so the locked-member
+   * skip and the active-synergy/history bookkeeping live in one place.
+   *
+   * Optional `skinLineId` narrows the picks to a sub-pool sharing both the
+   * given color *and* skin line — used by the chroma-and-line owner action.
+   */
+  public applyColorSynergy(
+    room: Room,
+    color: string,
+    skinLineId?: number
+  ): { color: string; picks: Array<{ memberId: string; skinId: number; chromaId: number }> } | null {
+    const entry = room.synergy?.colors.find(
+      (c) => c.type === "sameColor" && c.color === color
+    );
+    if (!entry) return null;
+
+    const picks: Array<{ memberId: string; skinId: number; chromaId: number }> = [];
+
+    for (const m of room.members.values()) {
+      if (m.lockedSkin) {
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
+      if (!m.isReady) continue;
+
+      const opts = (m.options ?? []).filter((o) => {
+        let match = o.auraColor === color;
+        if (skinLineId !== undefined) {
+          match = match && o.skinLineId === skinLineId;
+        }
+        return match;
+      });
+
+      if (!opts.length) {
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
+
+      const idx = randomInt(0, opts.length);
+      const opt = opts[idx];
+
+      m.skinId = opt.skinId;
+      m.chromaId = opt.chromaId;
+
+      picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
+    }
+
+    this.addToHistory(room, color, picks);
+
+    room.activeSynergy = { type: "sameColor", color, timestamp: Date.now() };
+    room.activeColor = color;
+
+    logger.info(`[ApplyColor] Room ${room.code}: Applied color ${color}`);
+
+    return { color, picks };
+  }
+
+  /**
    * Apply a specific skin line synergy (called from UI / Story 6.6).
    */
   public applySkinLineSynergy(
@@ -420,6 +498,10 @@ export class RoomService {
     const picks: Array<{ memberId: string; skinId: number; chromaId: number }> = [];
 
     for (const member of room.members.values()) {
+      if (member.lockedSkin) {
+        picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+        continue;
+      }
       if (!member.options || member.options.length === 0) {
         picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
         continue;
@@ -510,6 +592,10 @@ export class RoomService {
     const picks: Array<{ memberId: string; skinId: number; chromaId: number }> = [];
 
     for (const m of room.members.values()) {
+      if (m.lockedSkin) {
+        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+        continue;
+      }
       if (!m.options || m.options.length === 0) {
         picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
         continue;
@@ -591,6 +677,7 @@ export class RoomService {
             skinId: config.skinId ?? randomInt(1000, 999999),
             chromaId: config.chromaId ?? 0,
             isReady: true,
+            lockedSkin: false,
             options: [] // Bots have no options for now
         };
         room.members.set(memberId, bot);

@@ -942,4 +942,176 @@ describe('RoomService', () => {
       });
     });
   });
+
+  describe('match lock', () => {
+    it('initializes lockedSkin: false on the room owner', () => {
+      const { member: owner } = service.createRoom('Owner');
+      expect(owner.lockedSkin).toBe(false);
+    });
+
+    it('initializes lockedSkin: false on joining members', () => {
+      const { room } = service.createRoom('Owner');
+      const result = service.joinRoom(room.code, 'Player2') as { member: { lockedSkin: boolean } };
+      expect(result.member.lockedSkin).toBe(false);
+    });
+
+    it('initializes lockedSkin: false on bots', () => {
+      const { room } = service.createRoom('Owner');
+      const bots = service.addBots(room, 1, {});
+      expect(bots[0].lockedSkin).toBe(false);
+    });
+
+    describe('setMemberSkinLock', () => {
+      it('flips the flag and reports the change', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        expect(service.setMemberSkinLock(room, owner.id, true)).toBe(true);
+        expect(owner.lockedSkin).toBe(true);
+      });
+
+      it('reports false on a no-op write', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        service.setMemberSkinLock(room, owner.id, true);
+        expect(service.setMemberSkinLock(room, owner.id, true)).toBe(false);
+      });
+
+      it('reports false for an unknown memberId', () => {
+        const { room } = service.createRoom('Owner');
+        expect(service.setMemberSkinLock(room, 'no-such-id', true)).toBe(false);
+      });
+
+      it('can clear the lock back to false', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        service.setMemberSkinLock(room, owner.id, true);
+        expect(service.setMemberSkinLock(room, owner.id, false)).toBe(true);
+        expect(owner.lockedSkin).toBe(false);
+      });
+    });
+
+    describe('applyColorSynergy', () => {
+      function setupBlueSynergy() {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: p2 } = service.joinRoom(room.code, 'P2') as { room: any; member: any };
+
+        owner.championId = 1;
+        owner.skinId = 999;
+        owner.chromaId = 0;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        owner.isReady = true;
+
+        p2.championId = 2;
+        p2.skinId = 888;
+        p2.chromaId = 0;
+        p2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+        p2.isReady = true;
+
+        service.recomputeSynergy(room);
+        return { room, owner, p2 };
+      }
+
+      it('returns null when no matching synergy entry exists', () => {
+        const { room } = service.createRoom('Owner');
+        expect(service.applyColorSynergy(room, 'Blue')).toBeNull();
+      });
+
+      it('preserves a locked member while changing the others', () => {
+        const { room, owner, p2 } = setupBlueSynergy();
+        service.setMemberSkinLock(room, owner.id, true);
+
+        const result = service.applyColorSynergy(room, 'Blue');
+        expect(result).not.toBeNull();
+
+        const ownerPick = result!.picks.find((p) => p.memberId === owner.id);
+        expect(ownerPick).toEqual({ memberId: owner.id, skinId: 999, chromaId: 0 });
+        expect(owner.skinId).toBe(999);
+        expect(owner.chromaId).toBe(0);
+
+        const p2Pick = result!.picks.find((p) => p.memberId === p2.id);
+        expect(p2Pick).toEqual({ memberId: p2.id, skinId: 200, chromaId: 20 });
+        expect(p2.skinId).toBe(200);
+        expect(p2.chromaId).toBe(20);
+      });
+
+      it('changes everyone when no member is locked', () => {
+        const { room, owner, p2 } = setupBlueSynergy();
+        service.applyColorSynergy(room, 'Blue');
+        expect(owner.skinId).toBe(100);
+        expect(p2.skinId).toBe(200);
+      });
+
+      it('records the apply on activeSynergy/activeColor and history', () => {
+        const { room } = setupBlueSynergy();
+        service.applyColorSynergy(room, 'Blue');
+        expect(room.activeSynergy?.type).toBe('sameColor');
+        expect(room.activeSynergy?.color).toBe('Blue');
+        expect(room.activeColor).toBe('Blue');
+        expect(room.history).toHaveLength(1);
+        expect(room.history[0].color).toBe('Blue');
+      });
+    });
+
+    describe('applySkinLineSynergy + match lock', () => {
+      it('preserves a locked member when applying a skin line', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: p2 } = service.joinRoom(room.code, 'P2') as { room: any; member: any };
+
+        owner.championId = 1;
+        owner.skinId = 999;
+        owner.chromaId = 5;
+        owner.options = [
+          { skinId: 100, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        ];
+        owner.isReady = true;
+
+        p2.championId = 2;
+        p2.skinId = 888;
+        p2.chromaId = 0;
+        p2.options = [
+          { skinId: 200, chromaId: 0, auraColor: null, skinLineId: 10, skinLineName: 'Star Guardian' },
+        ];
+        p2.isReady = true;
+
+        service.recomputeSynergy(room);
+        service.setMemberSkinLock(room, owner.id, true);
+
+        const result = service.applySkinLineSynergy(room, 10);
+        expect(result).not.toBeNull();
+
+        const ownerPick = result!.picks.find((p) => p.memberId === owner.id);
+        expect(ownerPick).toEqual({ memberId: owner.id, skinId: 999, chromaId: 5 });
+        expect(owner.skinId).toBe(999);
+        expect(owner.chromaId).toBe(5);
+
+        const p2Pick = result!.picks.find((p) => p.memberId === p2.id);
+        expect(p2Pick).toEqual({ memberId: p2.id, skinId: 200, chromaId: 0 });
+      });
+    });
+
+    describe('generateAutoApplyPicks + match lock', () => {
+      it('preserves a locked member through auto-apply', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: p2 } = service.joinRoom(room.code, 'P2') as { room: any; member: any };
+
+        owner.championId = 1;
+        owner.skinId = 777;
+        owner.chromaId = 0;
+        owner.options = [{ skinId: 100, chromaId: 10, auraColor: 'Blue' }];
+        owner.isReady = true;
+
+        p2.championId = 2;
+        p2.skinId = 888;
+        p2.chromaId = 0;
+        p2.options = [{ skinId: 200, chromaId: 20, auraColor: 'Blue' }];
+        p2.isReady = true;
+
+        service.recomputeSynergy(room);
+        service.setMemberSkinLock(room, owner.id, true);
+
+        service.generateAutoApplyPicks(room);
+
+        expect(owner.skinId).toBe(777);
+        expect(owner.chromaId).toBe(0);
+        expect(p2.skinId).toBe(200);
+      });
+    });
+  });
 });

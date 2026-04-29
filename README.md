@@ -35,7 +35,7 @@ It is a dedicated companion backend — no UI, no account system. Clients identi
 - **Synergy engine** — computes shared Skin Lines and shared chroma colors across the room's available options, emitted alongside raw selections so the client can render suggestions.
 - **Presence** — tracks identified clients across their active rooms.
 - **Invitations** — point-to-point delivery of room invites between identified clients, with per-target rate limiting.
-- **Versioning** — event payloads are versioned and adapted per-client so older and newer app versions can coexist during rollouts.
+- **Versioning** — event payloads are versioned (`CURRENT_EVENT_VERSION` in `src/types/event-versions.ts`, currently **v3**) and adapted per-client so older and newer app versions can coexist during rollouts. v3 added `members[].lockedSkin` to `room-state` (per-match skin lock); V2 clients still get the field stripped automatically.
 
 ## Getting started (development)
 

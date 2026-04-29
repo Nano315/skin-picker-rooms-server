@@ -11,6 +11,7 @@ import type {
   ColorSuggestionV2,
   RoomStateV1,
   RoomStateV2,
+  RoomStateV3,
   GroupApplyComboV1,
   GroupApplyComboV2,
   RoomMember,
@@ -106,16 +107,29 @@ interface RoomStateData {
 export function createRoomStatePayload(
   data: RoomStateData,
   clientVersion: EventVersion
-): RoomStateV1 | RoomStateV2 {
-  if (clientVersion >= 2) {
+): RoomStateV1 | RoomStateV2 | RoomStateV3 {
+  if (clientVersion >= 3) {
     return {
-      version: 2,
+      version: 3,
       ...data,
     };
   }
 
-  // V1 format (legacy) - no version field
-  return { ...data };
+  // v2 and below: strip lockedSkin from members (field unknown to those
+  // clients; harmless to leave but cleaner over the wire).
+  const stripped: RoomStateData = {
+    ...data,
+    members: data.members.map(({ lockedSkin: _l, ...rest }) => rest),
+  };
+
+  if (clientVersion >= 2) {
+    return {
+      version: 2,
+      ...stripped,
+    };
+  }
+
+  return { ...stripped };
 }
 
 // ============================================

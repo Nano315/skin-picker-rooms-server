@@ -61,6 +61,15 @@ export interface ApplySkinLineSynergyPayload {
   skinLineId: number;
 }
 
+// Per-match skin lock — broadcast by a member to declare they don't want
+// auto-apply / owner-applied changes to touch their skin this game.
+export interface SetSkinLockPayload {
+  roomId: string;
+  memberId: string;
+  memberToken: string;
+  locked: boolean;
+}
+
 // ============================================
 // Server → Client Events (Outgoing Payloads)
 // ============================================
@@ -122,6 +131,7 @@ export interface ClientToServerEvents {
   "request-group-reroll": (payload: RequestGroupRerollPayload) => void;
   "suggest-color": (payload: SuggestColorPayload) => void;
   "apply-skin-line-synergy": (payload: ApplySkinLineSynergyPayload) => void;
+  "set-skin-lock": (payload: SetSkinLockPayload) => void;
 }
 
 export interface ServerToClientEvents {

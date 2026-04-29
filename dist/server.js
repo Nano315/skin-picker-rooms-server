@@ -17,38 +17,104 @@ const versionAdapter_1 = require("./utils/versionAdapter");
 const room_routes_1 = __importDefault(require("./routes/room.routes"));
 const room_service_1 = require("./services/room.service");
 const presence_service_1 = require("./services/presence.service");
-const crypto_1 = require("crypto");
 const app = (0, express_1.default)();
 const roomService = room_service_1.RoomService.getInstance();
 // --- Configuration & Middleware ---
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+if (process.env.NODE_ENV !== "production") {
+    allowedOrigins.push("http://localhost:5173", "http://127.0.0.1:5173");
+}
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Requests with no Origin header (Electron file://, curl, server-to-server) are allowed.
+        if (!origin) {
+            return callback(null, true);
+        }
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        logger_1.logger.warn(`[cors] Rejected origin: ${origin}`);
+        return callback(new Error("Origin not allowed by CORS"));
+    },
+    credentials: false,
+};
 app.use((0, helmet_1.default)());
-app.use((0, cors_1.default)()); // Configure origin in production
+app.use((0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
-// Rate limiting
+// Rate limiting — disabled in tests to avoid flakiness when running many requests in sequence.
+const RATE_LIMIT_DISABLED = process.env.NODE_ENV === "test" || process.env.DISABLE_RATE_LIMIT === "true";
+// Global baseline applied to every route, keyed by client IP.
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
-    max: 100,
+    max: 300,
     standardHeaders: true,
     legacyHeaders: false,
+    skip: () => RATE_LIMIT_DISABLED,
 });
 app.use(limiter);
+// Stricter per-IP limit on room creation to prevent spam.
+const createRoomLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many rooms created, try again later" },
+    skip: () => RATE_LIMIT_DISABLED,
+});
+// Stricter per-IP limit on room join to prevent brute-forcing room codes.
+const joinRoomLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many join attempts, try again later" },
+    skip: () => RATE_LIMIT_DISABLED,
+});
 // --- Routes ---
-app.use("/rooms", room_routes_1.default);
+app.use("/rooms", (req, res, next) => {
+    if (req.method === "POST" && req.path === "/")
+        return createRoomLimiter(req, res, next);
+    if (req.method === "POST" && req.path === "/bot")
+        return createRoomLimiter(req, res, next);
+    if (req.method === "POST" && req.path === "/join")
+        return joinRoomLimiter(req, res, next);
+    return next();
+}, room_routes_1.default);
 app.get("/", (req, res) => {
     res.send("Skin Picker Rooms server is running");
 });
 // --- Server Setup ---
 exports.httpServer = http_1.default.createServer(app);
 exports.io = new socket_io_1.Server(exports.httpServer, {
-    cors: { origin: "*" },
+    cors: {
+        origin: (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+            logger_1.logger.warn(`[socket.io/cors] Rejected origin: ${origin}`);
+            return callback(new Error("Origin not allowed by CORS"));
+        },
+        credentials: false,
+    },
 });
 // --- Socket.io Logic ---
+// Validate a Riot-style PUUID. Real encrypted PUUIDs are 78 URL-safe base64
+// characters, but simulator fixtures and legacy test traffic can be shorter,
+// so we accept a bounded range with a strict character class. The old check
+// (`length < 10`) let "abcdefghij" through.
+const PUUID_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
+function isValidPuuid(value) {
+    return typeof value === "string" && PUUID_REGEX.test(value);
+}
 // Map socketId -> { roomId, memberId }
 const socketToMember = new Map();
 // Rate limiting for room invitations (Story 4.5)
 // Key: `${senderPuuid}:${targetPuuid}` -> timestamp of last invite
 const inviteRateLimits = new Map();
-const INVITE_RATE_LIMIT_MS = 30000; // 30 seconds
+const INVITE_RATE_LIMIT_MS = 10000; // 10 seconds
 const INVITE_CLEANUP_INTERVAL_MS = 300000; // 5 minutes
 // Cleanup expired rate limit entries periodically
 setInterval(() => {
@@ -82,7 +148,7 @@ exports.io.on("connection", (socket) => {
     const clientVersion = (0, versionAdapter_1.registerClientVersion)(socket.id, typeof rawVersion === "string" ? parseInt(rawVersion, 10) || 1 : 1);
     logger_1.logger.info(`[socket] connected ${socket.id} (v${clientVersion})`);
     const safeHandler = (0, socketHelpers_1.createSafeHandler)(socket);
-    socket.on("join-room", safeHandler("join-room", ({ roomId, memberId }) => {
+    socket.on("join-room", safeHandler("join-room", ({ roomId, memberId, memberToken }) => {
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -91,6 +157,7 @@ exports.io.on("connection", (socket) => {
         if (!member) {
             throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
         }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "join-room");
         logger_1.logger.debug(`[socket] ${socket.id} join room ${roomId} as member ${memberId}`);
         socket.join(roomId);
         socketToMember.set(socket.id, { roomId, memberId });
@@ -99,7 +166,7 @@ exports.io.on("connection", (socket) => {
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("update-selection", safeHandler("update-selection", (payload) => {
-        const { roomId, memberId, championId, championAlias, skinId, chromaId } = payload;
+        const { roomId, memberId, memberToken, championId, championAlias, skinId, chromaId } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -107,6 +174,14 @@ exports.io.on("connection", (socket) => {
         const member = room.members.get(memberId);
         if (!member) {
             throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+        }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "update-selection");
+        // When the member switches champion, their previously-uploaded skin/chroma
+        // options belong to the old champion and must not participate in synergy
+        // calculations until the client resends owned-options for the new champion.
+        if (member.championId !== championId) {
+            member.options = [];
+            member.isReady = false;
         }
         member.championId = championId;
         member.championAlias = championAlias ?? "";
@@ -117,7 +192,7 @@ exports.io.on("connection", (socket) => {
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("owned-options", safeHandler("owned-options", (payload) => {
-        const { roomId, memberId, championId, championAlias, options } = payload;
+        const { roomId, memberId, memberToken, championId, championAlias, options } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
@@ -126,6 +201,7 @@ exports.io.on("connection", (socket) => {
         if (!member) {
             throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
         }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "owned-options");
         member.championId = championId;
         member.championAlias = championAlias ?? "";
         member.options = Array.isArray(options) ? options : [];
@@ -160,7 +236,16 @@ exports.io.on("connection", (socket) => {
         const serializedRoom = roomService.serializeRoom(room);
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
-    socket.on("leave-room", safeHandler("leave-room", ({ roomId, memberId }) => {
+    socket.on("leave-room", safeHandler("leave-room", ({ roomId, memberId, memberToken }) => {
+        const room = roomService.getRoom(roomId);
+        if (!room) {
+            throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+        }
+        const member = room.members.get(memberId);
+        if (!member) {
+            throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+        }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "leave-room");
         logger_1.logger.debug(`[leave-room] ${socket.id} explicit leave room ${roomId}`);
         handleMemberLeave(roomId, memberId, "leave");
         socketToMember.delete(socket.id);
@@ -194,11 +279,16 @@ exports.io.on("connection", (socket) => {
         }
     });
     socket.on("request-group-reroll", safeHandler("request-group-reroll", (payload) => {
-        const { roomId, memberId, type, color, sourceMemberId } = payload;
+        const { roomId, memberId, memberToken, type, color, skinLineId, sourceMemberId } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
         }
+        const member = room.members.get(memberId);
+        if (!member) {
+            throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+        }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "request-group-reroll");
         if (room.ownerId !== memberId) {
             throw new errors_1.AppError(errors_1.ErrorCodes.UNAUTHORIZED, `Only owner can trigger group reroll`, true, {
                 roomId,
@@ -206,49 +296,54 @@ exports.io.on("connection", (socket) => {
                 ownerId: room.ownerId,
             });
         }
-        const synergy = room.synergy;
-        if (!synergy) {
-            logger_1.logger.warn(`[request-group-reroll] No synergy computed for room ${roomId}`);
-            return;
-        }
-        const entry = synergy.colors.find((c) => c.type === type && c.color === color);
-        if (!entry) {
+        const result = roomService.applyColorSynergy(room, color, skinLineId);
+        if (!result) {
             logger_1.logger.warn(`[request-group-reroll] No synergy entry for color=${color} in room=${roomId}`);
             return;
         }
-        const picks = [];
-        // Reroll logic
-        for (const m of room.members.values()) {
-            if (!m.isReady)
-                continue;
-            const opts = (m.options ?? []).filter((o) => o.auraColor === color);
-            if (!opts.length) {
-                // Keep current
-                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
-                continue;
-            }
-            const idx = (0, crypto_1.randomInt)(0, opts.length);
-            const opt = opts[idx];
-            m.skinId = opt.skinId;
-            m.chromaId = opt.chromaId;
-            picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
-        }
-        logger_1.logger.info(`[request-group-reroll] applying combo color=${color} in room=${roomId}`);
-        room.activeSynergy = { type, color, timestamp: Date.now() };
-        if (type === "sameColor") {
-            room.activeColor = color;
-        }
-        // Add to history
-        roomService.addToHistory(room, color, picks);
-        // Emit versioned group-apply-combo
-        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "group-apply-combo", (version) => (0, versionAdapter_1.createGroupApplyComboPayload)({ type, color, picks, sourceMemberId, autoApplied: false }, version));
-        // Emit versioned room-state
+        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "group-apply-combo", (version) => (0, versionAdapter_1.createGroupApplyComboPayload)({ type, color, picks: result.picks, sourceMemberId, autoApplied: false }, version));
         const serializedRoom = roomService.serializeRoom(room);
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
     socket.on("suggest-color", (payload, ack) => {
         try {
-            const { roomId, memberId, skinId, chromaId } = payload;
+            if (!payload || typeof payload !== "object") {
+                logger_1.logger.warn(`[suggest-color] Rejected: payload is not an object`);
+                if (ack)
+                    ack({ success: false, error: 'Invalid payload' });
+                return;
+            }
+            const { roomId, memberId, memberToken, skinId, chromaId } = payload;
+            if (typeof roomId !== "string" || roomId.length === 0 || roomId.length > 128) {
+                logger_1.logger.warn(`[suggest-color] Rejected: invalid roomId`);
+                if (ack)
+                    ack({ success: false, error: 'Invalid roomId' });
+                return;
+            }
+            if (typeof memberId !== "string" || memberId.length === 0 || memberId.length > 128) {
+                logger_1.logger.warn(`[suggest-color] Rejected: invalid memberId`);
+                if (ack)
+                    ack({ success: false, error: 'Invalid memberId' });
+                return;
+            }
+            if (typeof skinId !== "number" ||
+                !Number.isInteger(skinId) ||
+                skinId < 0 ||
+                skinId > 1000000000) {
+                logger_1.logger.warn(`[suggest-color] Rejected: invalid skinId (${String(skinId)})`);
+                if (ack)
+                    ack({ success: false, error: 'Invalid skinId' });
+                return;
+            }
+            if (typeof chromaId !== "number" ||
+                !Number.isInteger(chromaId) ||
+                chromaId < 0 ||
+                chromaId > 1000000000) {
+                logger_1.logger.warn(`[suggest-color] Rejected: invalid chromaId (${String(chromaId)})`);
+                if (ack)
+                    ack({ success: false, error: 'Invalid chromaId' });
+                return;
+            }
             logger_1.logger.info(`[suggest-color] received suggestion in room ${roomId} from member ${memberId}`);
             const room = roomService.getRoom(roomId);
             if (!room) {
@@ -262,6 +357,14 @@ exports.io.on("connection", (socket) => {
                 logger_1.logger.warn(`[suggest-color] Member ${memberId} not found in room ${roomId}`);
                 if (ack)
                     ack({ success: false, error: 'Member not found' });
+                return;
+            }
+            try {
+                (0, socketHelpers_1.assertMemberAuth)(sender, memberToken, "suggest-color");
+            }
+            catch {
+                if (ack)
+                    ack({ success: false, error: 'Unauthorized' });
                 return;
             }
             logger_1.logger.info(`[suggest-color] from ${sender.name} (${memberId}) in room ${roomId}: skin=${skinId} chroma=${chromaId}`);
@@ -284,36 +387,18 @@ exports.io.on("connection", (socket) => {
                 ack({ success: false, error: 'Internal server error' });
         }
     });
-    // --- Set Sync Mode (Story 6.4) ---
-    socket.on("set-sync-mode", safeHandler("set-sync-mode", (payload) => {
-        const { roomId, memberId, mode } = payload;
-        const room = roomService.getRoom(roomId);
-        if (!room) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
-        }
-        if (room.ownerId !== memberId) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.UNAUTHORIZED, `Only owner can change sync mode`, true, {
-                roomId,
-                memberId,
-                ownerId: room.ownerId,
-            });
-        }
-        if (!["chromas", "skins", "both"].includes(mode)) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.INVALID_PAYLOAD, `Invalid sync mode: ${mode}`, true, { mode });
-        }
-        room.syncMode = mode;
-        logger_1.logger.info(`[SyncMode] Room ${room.code}: Mode changed to ${mode} by owner`);
-        // Broadcast updated room state
-        const serializedRoom = roomService.serializeRoom(room);
-        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
-    }));
     // --- Apply Skin Line Synergy (Story 6.6) ---
     socket.on("apply-skin-line-synergy", safeHandler("apply-skin-line-synergy", (payload) => {
-        const { roomId, memberId, skinLineId } = payload;
+        const { roomId, memberId, memberToken, skinLineId } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
         }
+        const member = room.members.get(memberId);
+        if (!member) {
+            throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+        }
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "apply-skin-line-synergy");
         if (room.ownerId !== memberId) {
             throw new errors_1.AppError(errors_1.ErrorCodes.UNAUTHORIZED, `Only owner can apply skin line synergy`, true, {
                 roomId,
@@ -338,43 +423,22 @@ exports.io.on("connection", (socket) => {
         const serializedRoom = roomService.serializeRoom(room);
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
-    // --- Apply Custom Combo from Builder (Story 6.7) ---
-    socket.on("apply-custom-combo", safeHandler("apply-custom-combo", (payload) => {
-        const { roomId, memberId, picks } = payload;
+    // --- Per-match Skin Lock ---
+    socket.on("set-skin-lock", safeHandler("set-skin-lock", (payload) => {
+        const { roomId, memberId, memberToken, locked } = payload;
         const room = roomService.getRoom(roomId);
         if (!room) {
             throw new errors_1.AppError(errors_1.ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
         }
-        if (room.ownerId !== memberId) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.UNAUTHORIZED, `Only owner can apply custom combo`, true, {
-                roomId,
-                memberId,
-                ownerId: room.ownerId,
-            });
+        const member = room.members.get(memberId);
+        if (!member) {
+            throw new errors_1.AppError(errors_1.ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
         }
-        if (!Array.isArray(picks) || picks.length === 0) {
-            throw new errors_1.AppError(errors_1.ErrorCodes.INVALID_PAYLOAD, `Picks array is required`, true, { picks });
-        }
-        // Apply picks to each member
-        for (const pick of picks) {
-            const member = room.members.get(pick.memberId);
-            if (member) {
-                member.skinId = pick.skinId;
-                member.chromaId = pick.chromaId;
-            }
-        }
-        room.activeSynergy = {
-            type: "custom",
-            timestamp: Date.now(),
-        };
-        logger_1.logger.info(`[Builder] Room ${room.code}: Custom combo applied by owner (${picks.length} picks)`);
-        // Broadcast combo
-        (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "group-apply-combo", (version) => (0, versionAdapter_1.createGroupApplyComboPayload)({
-            type: "sameColor",
-            picks,
-            autoApplied: false,
-        }, version));
-        // Broadcast updated room state
+        (0, socketHelpers_1.assertMemberAuth)(member, memberToken, "set-skin-lock");
+        const changed = roomService.setMemberSkinLock(room, memberId, !!locked);
+        if (!changed)
+            return; // no-op, don't spam clients with identical state
+        logger_1.logger.debug(`[set-skin-lock] Room ${room.code}: ${member.name} → ${locked ? "locked" : "unlocked"}`);
         const serializedRoom = roomService.serializeRoom(room);
         (0, versionAdapter_1.emitVersionedToRoom)(exports.io, roomId, "room-state", (version) => (0, versionAdapter_1.createRoomStatePayload)(serializedRoom, version));
     }));
@@ -383,33 +447,41 @@ exports.io.on("connection", (socket) => {
         try {
             const { puuid, summonerName, friends } = payload;
             // Validate payload
-            if (!puuid || typeof puuid !== "string" || puuid.length < 10) {
+            if (!isValidPuuid(puuid)) {
                 logger_1.logger.warn("[identify] Invalid puuid received", { puuid });
                 return;
             }
-            if (!summonerName || typeof summonerName !== "string") {
+            if (typeof summonerName !== "string" ||
+                summonerName.length === 0 ||
+                summonerName.length > 128) {
                 logger_1.logger.warn("[identify] Invalid summonerName received", { summonerName });
                 return;
             }
-            if (!Array.isArray(friends)) {
+            if (!Array.isArray(friends) || friends.length > 1000) {
                 logger_1.logger.warn("[identify] Invalid friends array received");
                 return;
             }
-            // 1. Register presence
-            presence_service_1.presenceManager.identify(socket, puuid, summonerName);
+            // Drop malformed entries rather than trusting every string in the array.
+            const validFriends = friends.filter(isValidPuuid);
+            // 1. Register presence (fails if PUUID already claimed by another socket)
+            const result = presence_service_1.presenceManager.identify(socket, puuid, summonerName);
+            if (!result.ok) {
+                socket.emit("identity-rejected", { reason: result.reason });
+                return;
+            }
             // 2. Store friends list
-            presence_service_1.presenceManager.setFriends(puuid, friends);
+            presence_service_1.presenceManager.setFriends(puuid, validFriends);
             // 3. Find online friends
-            const onlineFriends = presence_service_1.presenceManager.getOnlineFriends(friends);
+            const onlineFriends = presence_service_1.presenceManager.getOnlineFriends(validFriends);
             // 4. Confirm to client
             socket.emit("identity-confirmed", { onlineFriends });
             // 5. Notify friends that this user is online
-            for (const friendPuuid of friends) {
+            for (const friendPuuid of validFriends) {
                 if (presence_service_1.presenceManager.isOnline(friendPuuid)) {
                     exports.io.to(`user:${friendPuuid}`).emit("friend-online", { puuid, summonerName });
                 }
             }
-            logger_1.logger.info(`[identify] ${summonerName} (${puuid}) identified with ${friends.length} friends, ${onlineFriends.length} online`);
+            logger_1.logger.info(`[identify] ${summonerName} (${puuid}) identified with ${validFriends.length} friends, ${onlineFriends.length} online`);
         }
         catch (err) {
             logger_1.logger.error("[identify] Error processing identify", err);
@@ -419,6 +491,18 @@ exports.io.on("connection", (socket) => {
     socket.on("send-room-invite", (payload) => {
         try {
             const { targetPuuid, roomCode } = payload;
+            if (!isValidPuuid(targetPuuid)) {
+                logger_1.logger.warn("[invite] Invalid targetPuuid received", { targetPuuid });
+                socket.emit("invite-failed", { reason: "invalid_payload" });
+                return;
+            }
+            if (typeof roomCode !== "string" ||
+                roomCode.length === 0 ||
+                roomCode.length > 32) {
+                logger_1.logger.warn("[invite] Invalid roomCode received", { roomCode });
+                socket.emit("invite-failed", { reason: "invalid_payload" });
+                return;
+            }
             // 1. Verify sender is identified
             const senderPuuid = presence_service_1.presenceManager.getPuuidBySocketId(socket.id);
             if (!senderPuuid) {
@@ -447,17 +531,19 @@ exports.io.on("connection", (socket) => {
                 logger_1.logger.debug(`[invite] Target offline: ${targetPuuid}`);
                 return;
             }
-            // 5. Check target is not already in the room
+            // 5. Check target is not already in the room.
+            //    Member.id is a randomly generated UUID, NOT a PUUID, so we cannot
+            //    compare it directly with targetPuuid. Instead we resolve the target's
+            //    current socket via the presence manager and check whether that socket
+            //    is currently registered as a member of this room.
             const room = roomService.getRoomByCode(roomCode);
             if (room) {
                 const targetSocketId = presence_service_1.presenceManager.getSocketId(targetPuuid);
-                if (targetSocketId) {
-                    const targetMemberInfo = socketToMember.get(targetSocketId);
-                    if (targetMemberInfo && targetMemberInfo.roomId === room.id) {
-                        socket.emit("invite-failed", { reason: "already_in_room" });
-                        logger_1.logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
-                        return;
-                    }
+                const targetMembership = targetSocketId ? socketToMember.get(targetSocketId) : null;
+                if (targetMembership && targetMembership.roomId === room.id) {
+                    socket.emit("invite-failed", { reason: "already_in_room" });
+                    logger_1.logger.debug(`[invite] Target ${targetPuuid} already in room ${roomCode}`);
+                    return;
                 }
             }
             // 6. Send invitation to target

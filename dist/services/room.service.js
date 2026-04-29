@@ -1,9 +1,27 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RoomService = void 0;
+exports.verifyMemberToken = verifyMemberToken;
 const crypto_1 = require("crypto");
 const logger_1 = require("../utils/logger");
 const GROUP_HISTORY_LIMIT = 3;
+function generateMemberToken() {
+    return (0, crypto_1.randomBytes)(32).toString("hex");
+}
+/**
+ * Constant-time comparison of a provided member token with the stored one.
+ * Returns false for any type/length mismatch.
+ */
+function verifyMemberToken(stored, provided) {
+    if (typeof provided !== "string" || provided.length !== stored.length) {
+        return false;
+    }
+    const a = Buffer.from(stored, "utf8");
+    const b = Buffer.from(provided, "utf8");
+    if (a.length !== b.length)
+        return false;
+    return (0, crypto_1.timingSafeEqual)(a, b);
+}
 class RoomService {
     constructor() {
         this.rooms = new Map();
@@ -17,11 +35,18 @@ class RoomService {
     }
     generateRoomCode() {
         const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        let code = "";
-        for (let i = 0; i < 6; i++) {
-            code += alphabet[(0, crypto_1.randomInt)(0, alphabet.length)];
+        const length = 8;
+        const maxAttempts = 32;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            let code = "";
+            for (let i = 0; i < length; i++) {
+                code += alphabet[(0, crypto_1.randomInt)(0, alphabet.length)];
+            }
+            if (!this.roomsByCode.has(code)) {
+                return code;
+            }
         }
-        return code;
+        throw new Error("Failed to generate a unique room code after maxAttempts");
     }
     createRoom(ownerName) {
         const roomId = (0, crypto_1.randomUUID)();
@@ -30,11 +55,13 @@ class RoomService {
         const owner = {
             id: ownerId,
             name: ownerName,
+            token: generateMemberToken(),
             championId: 0,
             championAlias: "",
             skinId: 0,
             chromaId: 0,
             isReady: false,
+            lockedSkin: false,
         };
         const room = {
             id: roomId,
@@ -42,7 +69,6 @@ class RoomService {
             ownerId,
             members: new Map([[ownerId, owner]]),
             history: [],
-            syncMode: "both",
             skinLineHistory: [],
         };
         this.rooms.set(roomId, room);
@@ -79,16 +105,32 @@ class RoomService {
         const member = {
             id: memberId,
             name: memberName,
+            token: generateMemberToken(),
             championId: 0,
             championAlias: "",
             skinId: 0,
             chromaId: 0,
             isReady: false,
+            lockedSkin: false,
         };
         room.members.set(memberId, member);
         // Recalculate synergy immediately? Not necessary as they have no options yet.
         logger_1.logger.info(`Member ${memberName} (${memberId}) joined room ${room.id}`);
         return { room, member };
+    }
+    /**
+     * Set a member's per-match skin lock. Returns true if the value changed,
+     * false if the member doesn't exist or the value is already what's set.
+     */
+    setMemberSkinLock(room, memberId, locked) {
+        const member = room.members.get(memberId);
+        if (!member)
+            return false;
+        const next = !!locked;
+        if (member.lockedSkin === next)
+            return false;
+        member.lockedSkin = next;
+        return true;
     }
     removeMember(room, memberId) {
         const member = room.members.get(memberId);
@@ -264,6 +306,10 @@ class RoomService {
         const synergy = availableSkinLines[idx];
         const picks = [];
         for (const member of room.members.values()) {
+            if (member.lockedSkin) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
             if (!member.options || member.options.length === 0) {
                 picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
                 continue;
@@ -290,6 +336,49 @@ class RoomService {
         return { skinLineId: synergy.skinLineId, skinLineName: synergy.skinLineName, picks };
     }
     /**
+     * Apply a specific color synergy (owner-triggered via `request-group-reroll`).
+     * Mirror of `applySkinLineSynergy` for the color path so the locked-member
+     * skip and the active-synergy/history bookkeeping live in one place.
+     *
+     * Optional `skinLineId` narrows the picks to a sub-pool sharing both the
+     * given color *and* skin line — used by the chroma-and-line owner action.
+     */
+    applyColorSynergy(room, color, skinLineId) {
+        const entry = room.synergy?.colors.find((c) => c.type === "sameColor" && c.color === color);
+        if (!entry)
+            return null;
+        const picks = [];
+        for (const m of room.members.values()) {
+            if (m.lockedSkin) {
+                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+                continue;
+            }
+            if (!m.isReady)
+                continue;
+            const opts = (m.options ?? []).filter((o) => {
+                let match = o.auraColor === color;
+                if (skinLineId !== undefined) {
+                    match = match && o.skinLineId === skinLineId;
+                }
+                return match;
+            });
+            if (!opts.length) {
+                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+                continue;
+            }
+            const idx = (0, crypto_1.randomInt)(0, opts.length);
+            const opt = opts[idx];
+            m.skinId = opt.skinId;
+            m.chromaId = opt.chromaId;
+            picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
+        }
+        this.addToHistory(room, color, picks);
+        room.activeSynergy = { type: "sameColor", color, timestamp: Date.now() };
+        room.activeColor = color;
+        logger_1.logger.info(`[ApplyColor] Room ${room.code}: Applied color ${color}`);
+        return { color, picks };
+    }
+    /**
      * Apply a specific skin line synergy (called from UI / Story 6.6).
      */
     applySkinLineSynergy(room, skinLineId) {
@@ -298,6 +387,10 @@ class RoomService {
             return null;
         const picks = [];
         for (const member of room.members.values()) {
+            if (member.lockedSkin) {
+                picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
+                continue;
+            }
             if (!member.options || member.options.length === 0) {
                 picks.push({ memberId: member.id, skinId: member.skinId, chromaId: member.chromaId });
                 continue;
@@ -339,15 +432,10 @@ class RoomService {
         const allHaveOptions = allMembers.every((m) => m.options && m.options.length > 0);
         if (!allHaveOptions)
             return false;
-        // Must have at least one synergy available (depending on mode)
-        const mode = room.syncMode ?? "both";
+        // Must have at least one synergy available
         const hasColorSynergies = this.getAvailableSynergies(room).length > 0;
         const hasSkinLineSynergies = this.getAvailableSkinLineSynergies(room).length > 0;
-        if (mode === "chromas" && !hasColorSynergies)
-            return false;
-        if (mode === "skins" && !hasSkinLineSynergies)
-            return false;
-        if (mode === "both" && !hasSkinLineSynergies && !hasColorSynergies)
+        if (!hasSkinLineSynergies && !hasColorSynergies)
             return false;
         // Don't auto-apply if already applied recently (within last 5 seconds)
         if (room.activeSynergy && Date.now() - room.activeSynergy.timestamp < 5000) {
@@ -355,23 +443,11 @@ class RoomService {
         }
         return true;
     }
-    /**
-     * Select and apply synergy based on room's syncMode.
-     * Returns picks or null if no synergy available.
-     */
     generateAutoApplyPicks(room) {
-        const mode = room.syncMode ?? "both";
-        if (mode === "skins") {
-            return this.generateSkinLinePicks(room);
-        }
-        if (mode === "both") {
-            // Try skin line first, fallback to color
-            const skinLineResult = this.generateSkinLinePicks(room);
-            if (skinLineResult)
-                return skinLineResult;
-            return this.generateColorPicks(room);
-        }
-        // Mode "chromas" — existing behavior
+        // Try skin line first, fallback to color
+        const skinLineResult = this.generateSkinLinePicks(room);
+        if (skinLineResult)
+            return skinLineResult;
         return this.generateColorPicks(room);
     }
     /**
@@ -386,6 +462,10 @@ class RoomService {
         const color = synergy.color;
         const picks = [];
         for (const m of room.members.values()) {
+            if (m.lockedSkin) {
+                picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
+                continue;
+            }
             if (!m.options || m.options.length === 0) {
                 picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
                 continue;
@@ -412,11 +492,11 @@ class RoomService {
             id: room.id,
             code: room.code,
             ownerId: room.ownerId,
-            members: Array.from(room.members.values()),
+            // Strip the per-member secret token before broadcasting to the room.
+            members: Array.from(room.members.values()).map(({ token: _token, ...publicMember }) => publicMember),
             synergy: room.synergy ?? { colors: [], skinLines: [] },
             activeSynergy: room.activeSynergy,
             activeColor: room.activeColor,
-            syncMode: room.syncMode ?? "both",
         };
     }
     // --- Testing helper ---
@@ -425,16 +505,33 @@ class RoomService {
         const toAdd = Math.min(count, freeSlots);
         const createdBots = [];
         const namePrefix = config.namePrefix || "Bot";
+        // Pick a starting index that avoids collision with any existing
+        // "<prefix> <n>" member name (including bots from prior addBots calls
+        // that may have been filled and partially vacated).
+        const takenSuffixes = new Set();
+        const prefixMatch = new RegExp(`^${namePrefix.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} (\\d+)$`);
+        for (const m of room.members.values()) {
+            const match = prefixMatch.exec(m.name);
+            if (match)
+                takenSuffixes.add(parseInt(match[1], 10));
+        }
+        let nextSuffix = 1;
         for (let i = 0; i < toAdd; i++) {
+            while (takenSuffixes.has(nextSuffix))
+                nextSuffix++;
+            takenSuffixes.add(nextSuffix);
             const memberId = (0, crypto_1.randomUUID)();
             const bot = {
                 id: memberId,
-                name: `${namePrefix} ${room.members.size + 1}`,
+                name: `${namePrefix} ${nextSuffix}`,
+                // Bots have a token for type uniformity but never connect via socket.
+                token: generateMemberToken(),
                 championId: config.championId ?? (0, crypto_1.randomInt)(1, 201),
                 championAlias: "",
                 skinId: config.skinId ?? (0, crypto_1.randomInt)(1000, 999999),
                 chromaId: config.chromaId ?? 0,
                 isReady: true,
+                lockedSkin: false,
                 options: [] // Bots have no options for now
             };
             room.members.set(memberId, bot);

@@ -83,6 +83,11 @@ export type Member = {
   // New info for group feature
   options?: GroupSkinOption[];
   isReady: boolean;
+
+  // Per-match lock — when true, the member opted out of skin changes for the
+  // current game. Auto-apply / synergy generation skip them and keep their
+  // current skin in the resulting picks.
+  lockedSkin: boolean;
 };
 
 export type ColorSynergy = {

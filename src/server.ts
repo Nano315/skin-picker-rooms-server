@@ -28,10 +28,10 @@ import type {
   RequestGroupRerollPayload,
   SuggestColorPayload,
   ApplySkinLineSynergyPayload,
+  SetSkinLockPayload,
   IdentifyPayload,
   SendRoomInvitePayload,
 } from "./types";
-import { randomInt } from "crypto";
 
 const app = express();
 const roomService = RoomService.getInstance();
@@ -377,63 +377,21 @@ io.on("connection", (socket) => {
       });
     }
 
-    const synergy = room.synergy;
-    if (!synergy) {
-      logger.warn(`[request-group-reroll] No synergy computed for room ${roomId}`);
+    const result = roomService.applyColorSynergy(room, color, skinLineId);
+    if (!result) {
+      logger.warn(
+        `[request-group-reroll] No synergy entry for color=${color} in room=${roomId}`
+      );
       return;
     }
 
-    const entry = synergy.colors.find((c) => c.type === type && c.color === color);
-    if (!entry) {
-      logger.warn(`[request-group-reroll] No synergy entry for color=${color} in room=${roomId}`);
-      return;
-    }
-
-    const picks: { memberId: string; skinId: number; chromaId: number }[] = [];
-
-    // Reroll logic
-    for (const m of room.members.values()) {
-      if (!m.isReady) continue;
-
-      const opts = (m.options ?? []).filter((o) => {
-        let match = o.auraColor === color;
-        if (skinLineId !== undefined) {
-          match = match && o.skinLineId === skinLineId;
-        }
-        return match;
-      });
-
-      if (!opts.length) {
-        // Keep current
-        picks.push({ memberId: m.id, skinId: m.skinId, chromaId: m.chromaId });
-        continue;
-      }
-
-      const idx = randomInt(0, opts.length);
-      const opt = opts[idx];
-
-      m.skinId = opt.skinId;
-      m.chromaId = opt.chromaId;
-
-      picks.push({ memberId: m.id, skinId: opt.skinId, chromaId: opt.chromaId });
-    }
-
-    logger.info(`[request-group-reroll] applying combo color=${color} in room=${roomId}`);
-
-    room.activeSynergy = { type, color, timestamp: Date.now() };
-    if (type === "sameColor") {
-      room.activeColor = color;
-    }
-
-    // Add to history
-    roomService.addToHistory(room, color, picks);
-
-    // Emit versioned group-apply-combo
     emitVersionedToRoom(io, roomId, "group-apply-combo", (version) =>
-      createGroupApplyComboPayload({ type, color, picks, sourceMemberId, autoApplied: false }, version)
+      createGroupApplyComboPayload(
+        { type, color, picks: result.picks, sourceMemberId, autoApplied: false },
+        version
+      )
     );
 
-    // Emit versioned room-state
     const serializedRoom = roomService.serializeRoom(room);
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
@@ -572,6 +530,33 @@ io.on("connection", (socket) => {
     );
 
     // Broadcast updated room state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
+  }));
+
+  // --- Per-match Skin Lock ---
+  socket.on("set-skin-lock", safeHandler<SetSkinLockPayload>("set-skin-lock", (payload) => {
+    const { roomId, memberId, memberToken, locked } = payload;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+
+    assertMemberAuth(member, memberToken, "set-skin-lock");
+
+    const changed = roomService.setMemberSkinLock(room, memberId, !!locked);
+    if (!changed) return; // no-op, don't spam clients with identical state
+
+    logger.debug(`[set-skin-lock] Room ${room.code}: ${member.name} → ${locked ? "locked" : "unlocked"}`);
+
     const serializedRoom = roomService.serializeRoom(room);
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
