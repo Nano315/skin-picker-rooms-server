@@ -88,6 +88,10 @@ export type Member = {
   // current game. Auto-apply / synergy generation skip them and keep their
   // current skin in the resulting picks.
   lockedSkin: boolean;
+
+  // Monotonic timestamp used to pick the next owner when the current one
+  // leaves: the oldest remaining member (smallest joinedAt) is promoted.
+  joinedAt: number;
 };
 
 export type ColorSynergy = {

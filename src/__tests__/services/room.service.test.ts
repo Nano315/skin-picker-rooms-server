@@ -100,10 +100,43 @@ describe('RoomService', () => {
       expect(room.members.has(member2.id)).toBe(false);
     });
 
-    it('should close the room if the owner leaves', () => {
+    it('should transfer ownership to the oldest remaining member when the owner leaves', () => {
         const { room, member: owner } = service.createRoom('Owner');
-        service.joinRoom(room.code, 'Player2');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any; member: any };
+        const { member: player3 } = service.joinRoom(room.code, 'Player3') as { room: any; member: any };
+        expect(room.members.size).toBe(3);
+
+        const result = service.removeMember(room, owner.id);
+
+        expect(result.roomClosed).toBe(false);
+        expect(result.newOwnerId).toBe(player2.id); // Player2 joined before Player3
+        expect(room.ownerId).toBe(player2.id);
         expect(room.members.size).toBe(2);
+        // Room must still be reachable by id and code.
+        expect(service.getRoom(room.id)).toBe(room);
+        expect(service.getRoomByCode(room.code)).toBe(room);
+        expect(player3.id).toBeDefined();
+    });
+
+    it('should pick a deterministic new owner when joinedAt ties', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any; member: any };
+        const { member: player3 } = service.joinRoom(room.code, 'Player3') as { room: any; member: any };
+        // Force a joinedAt collision between the two non-owner members.
+        const collisionTs = Date.now();
+        player2.joinedAt = collisionTs;
+        player3.joinedAt = collisionTs;
+
+        service.removeMember(room, owner.id);
+
+        // Tiebreak: lexicographically smaller id wins.
+        const expected = [player2.id, player3.id].sort()[0];
+        expect(room.ownerId).toBe(expected);
+    });
+
+    it('should close the room when the owner is the last member', () => {
+        const { room, member: owner } = service.createRoom('Owner');
+        expect(room.members.size).toBe(1);
 
         const result = service.removeMember(room, owner.id);
 
@@ -112,17 +145,40 @@ describe('RoomService', () => {
         expect(service.getRoom(room.id)).toBeUndefined();
         expect(service.getRoomByCode(room.code)).toBeUndefined();
     });
+  });
 
-    it('should close the room if the last member leaves', () => {
-        const { room, member: owner } = service.createRoom('Owner');
-        expect(room.members.size).toBe(1);
+  describe('kickMember', () => {
+    it('removes the targeted member and keeps the room open', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const { member: player2 } = service.joinRoom(room.code, 'Player2') as { room: any; member: any };
 
-        const result = service.removeMember(room, owner.id);
-        
-        expect(result.roomClosed).toBe(true);
-        expect(result.reason).toBe('owner-left'); // In this case, owner is the last member
-        expect(service.getRoom(room.id)).toBeUndefined();
-        expect(service.getRoomByCode(room.code)).toBeUndefined();
+      const result = service.kickMember(room, player2.id);
+
+      expect(result.ok).toBe(true);
+      expect(room.members.has(player2.id)).toBe(false);
+      expect(room.ownerId).toBe(owner.id);
+      expect(service.getRoom(room.id)).toBe(room);
+    });
+
+    it('refuses to kick the owner themselves', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      service.joinRoom(room.code, 'Player2');
+
+      const result = service.kickMember(room, owner.id);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('self');
+      expect(room.members.has(owner.id)).toBe(true);
+    });
+
+    it('returns not_found for an unknown target', () => {
+      const { room } = service.createRoom('Owner');
+      service.joinRoom(room.code, 'Player2');
+
+      const result = service.kickMember(room, 'no-such-member');
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('not_found');
     });
   });
 
@@ -959,6 +1015,15 @@ describe('RoomService', () => {
       const { room } = service.createRoom('Owner');
       const bots = service.addBots(room, 1, {});
       expect(bots[0].lockedSkin).toBe(false);
+    });
+
+    it('stamps joinedAt on the owner, joiners and bots', () => {
+      const { room, member: owner } = service.createRoom('Owner');
+      const join = service.joinRoom(room.code, 'P2') as { member: { joinedAt: number } };
+      const bots = service.addBots(room, 1, {});
+      expect(typeof owner.joinedAt).toBe('number');
+      expect(typeof join.member.joinedAt).toBe('number');
+      expect(typeof bots[0].joinedAt).toBe('number');
     });
 
     describe('setMemberSkinLock', () => {

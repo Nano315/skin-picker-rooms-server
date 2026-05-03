@@ -29,6 +29,7 @@ import type {
   SuggestColorPayload,
   ApplySkinLineSynergyPayload,
   SetSkinLockPayload,
+  KickMemberPayload,
   IdentifyPayload,
   SendRoomInvitePayload,
 } from "./types";
@@ -161,17 +162,19 @@ function handleMemberLeave(roomId: string, memberId: string, reason: string) {
   const result = roomService.removeMember(room, memberId);
 
   if (result.roomClosed) {
-    // Room closed, notify everyone
+    // Last member out — notify everyone (owner-left only fires when there's
+    // no one left to inherit) and disconnect any stragglers in the room.
     io.to(roomId).emit("room-closed", { reason: result.reason });
-    // Disconnect all sockets in this room
     io.in(roomId).disconnectSockets(true);
-  } else {
-    // Room still active, notify state update with versioned payload
-    const serializedRoom = roomService.serializeRoom(room);
-    emitVersionedToRoom(io, roomId, "room-state", (version) =>
-      createRoomStatePayload(serializedRoom, version)
-    );
+    return;
   }
+
+  // Still active — broadcast the new state. The room-state payload carries
+  // the (possibly new) ownerId, so clients pick up the transfer naturally.
+  const serializedRoom = roomService.serializeRoom(room);
+  emitVersionedToRoom(io, roomId, "room-state", (version) =>
+    createRoomStatePayload(serializedRoom, version)
+  );
 }
 
 io.on("connection", (socket) => {
@@ -530,6 +533,70 @@ io.on("connection", (socket) => {
     );
 
     // Broadcast updated room state
+    const serializedRoom = roomService.serializeRoom(room);
+    emitVersionedToRoom(io, roomId, "room-state", (version) =>
+      createRoomStatePayload(serializedRoom, version)
+    );
+  }));
+
+  // --- Kick Member (owner only) ---
+  socket.on("kick-member", safeHandler<KickMemberPayload>("kick-member", (payload) => {
+    const { roomId, memberId, memberToken, targetMemberId } = payload;
+
+    const room = roomService.getRoom(roomId);
+    if (!room) {
+      throw new AppError(ErrorCodes.ROOM_NOT_FOUND, `Room ${roomId} not found`, true, { roomId });
+    }
+
+    const member = room.members.get(memberId);
+    if (!member) {
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Member ${memberId} not found`, true, { roomId, memberId });
+    }
+
+    assertMemberAuth(member, memberToken, "kick-member");
+
+    if (room.ownerId !== memberId) {
+      throw new AppError(ErrorCodes.UNAUTHORIZED, `Only owner can kick members`, true, {
+        roomId,
+        memberId,
+        ownerId: room.ownerId,
+      });
+    }
+
+    if (typeof targetMemberId !== "string" || targetMemberId.length === 0) {
+      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Invalid targetMemberId`, true, { targetMemberId });
+    }
+
+    const target = room.members.get(targetMemberId);
+    const result = roomService.kickMember(room, targetMemberId);
+    if (!result.ok) {
+      if (result.reason === "self") {
+        throw new AppError(ErrorCodes.UNAUTHORIZED, `Owner cannot kick themselves; use leave-room`, true, { targetMemberId });
+      }
+      throw new AppError(ErrorCodes.MEMBER_NOT_FOUND, `Target member not found`, true, { targetMemberId });
+    }
+
+    logger.info(`[kick-member] Room ${room.code}: ${member.name} kicked ${target?.name ?? targetMemberId}`);
+
+    // Notify the kicked member's socket(s) and disconnect them, then push the
+    // updated room-state to whoever's left. We do this by walking the room's
+    // current sockets — the kicked member may have multiple if they reconnected.
+    (async () => {
+      try {
+        const sockets = await io.in(roomId).fetchSockets();
+        for (const s of sockets) {
+          const info = socketToMember.get(s.id);
+          if (info && info.memberId === targetMemberId) {
+            s.emit("room-closed", { reason: "kicked" });
+            socketToMember.delete(s.id);
+            s.disconnect(true);
+          }
+        }
+      } catch (err) {
+        logger.error("[kick-member] Failed to disconnect kicked sockets", err);
+      }
+    })();
+
     const serializedRoom = roomService.serializeRoom(room);
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)

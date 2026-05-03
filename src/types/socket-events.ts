@@ -70,6 +70,15 @@ export interface SetSkinLockPayload {
   locked: boolean;
 }
 
+// Owner-only: remove another member from the room. The targeted member's
+// socket gets a `room-closed` event with reason "kicked" and is disconnected.
+export interface KickMemberPayload {
+  roomId: string;
+  memberId: string; // The owner asking for the kick
+  memberToken: string;
+  targetMemberId: string;
+}
+
 // ============================================
 // Server → Client Events (Outgoing Payloads)
 // ============================================
@@ -132,6 +141,7 @@ export interface ClientToServerEvents {
   "suggest-color": (payload: SuggestColorPayload) => void;
   "apply-skin-line-synergy": (payload: ApplySkinLineSynergyPayload) => void;
   "set-skin-lock": (payload: SetSkinLockPayload) => void;
+  "kick-member": (payload: KickMemberPayload) => void;
 }
 
 export interface ServerToClientEvents {

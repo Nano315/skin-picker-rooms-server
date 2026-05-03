@@ -568,4 +568,157 @@ describe('Socket.io Integration Flow', () => {
     });
   });
 
+  describe('kick-member', () => {
+    it('disconnects the kicked member with reason "kicked" and broadcasts the new room-state to the rest', (done) => {
+      const clientAddress = `http://localhost:${port}`;
+      clientSocket1 = Client(clientAddress, { forceNew: true }); // owner
+      clientSocket2 = Client(clientAddress, { forceNew: true }); // target
+
+      let connectedClients = 0;
+      let kickSent = false;
+      let player2Closed = false;
+      let ownerSawNewState = false;
+
+      const tryDone = () => {
+        if (player2Closed && ownerSawNewState) done();
+      };
+
+      const onConnect = () => {
+        connectedClients++;
+        if (connectedClients === 2) {
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
+        }
+      };
+
+      clientSocket1.on('connect', onConnect);
+      clientSocket2.on('connect', onConnect);
+
+      clientSocket2.on('room-closed', (payload) => {
+        if (!kickSent) return; // ignore unrelated emissions
+        try {
+          expect(payload.reason).toBe('kicked');
+          player2Closed = true;
+          tryDone();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      clientSocket1.on('room-state', (payload) => {
+        if (!kickSent) return;
+        try {
+          // After the kick, only the owner should remain.
+          expect(payload.members.length).toBe(1);
+          expect(payload.members[0].id).toBe(member1Id);
+          ownerSawNewState = true;
+          tryDone();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      setTimeout(() => {
+        kickSent = true;
+        clientSocket1.emit('kick-member', {
+          roomId,
+          memberId: member1Id,
+          memberToken: member1Token,
+          targetMemberId: member2Id,
+        });
+      }, 500);
+    }, 10000);
+
+    it('rejects kick-member from a non-owner with UNAUTHORIZED', (done) => {
+      const clientAddress = `http://localhost:${port}`;
+      clientSocket1 = Client(clientAddress, { forceNew: true }); // owner
+      clientSocket2 = Client(clientAddress, { forceNew: true }); // attacker
+
+      let connectedClients = 0;
+      let kickSent = false;
+
+      const onConnect = () => {
+        connectedClients++;
+        if (connectedClients === 2) {
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
+        }
+      };
+
+      clientSocket1.on('connect', onConnect);
+      clientSocket2.on('connect', onConnect);
+
+      clientSocket2.on('error', (payload) => {
+        if (!kickSent) return;
+        try {
+          expect(payload.code).toBe('UNAUTHORIZED');
+          done();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      setTimeout(() => {
+        kickSent = true;
+        // Player2 (non-owner) tries to kick the owner.
+        clientSocket2.emit('kick-member', {
+          roomId,
+          memberId: member2Id,
+          memberToken: member2Token,
+          targetMemberId: member1Id,
+        });
+      }, 500);
+    }, 10000);
+  });
+
+  describe('owner transfer on owner leave', () => {
+    it('keeps the room open and broadcasts a new ownerId when the owner leaves with members remaining', (done) => {
+      const clientAddress = `http://localhost:${port}`;
+      clientSocket1 = Client(clientAddress, { forceNew: true }); // owner
+      clientSocket2 = Client(clientAddress, { forceNew: true }); // future owner
+
+      let connectedClients = 0;
+      let leaveSent = false;
+
+      const onConnect = () => {
+        connectedClients++;
+        if (connectedClients === 2) {
+          clientSocket1.emit('join-room', { roomId, memberId: member1Id, memberToken: member1Token });
+          clientSocket2.emit('join-room', { roomId, memberId: member2Id, memberToken: member2Token });
+        }
+      };
+
+      clientSocket1.on('connect', onConnect);
+      clientSocket2.on('connect', onConnect);
+
+      clientSocket2.on('room-closed', () => {
+        // The remaining member must NOT see the room closed when ownership
+        // transfers — that's the entire point of this test.
+        if (leaveSent) done(new Error('Room was closed instead of transferring ownership'));
+      });
+
+      clientSocket2.on('room-state', (payload) => {
+        if (!leaveSent) return;
+        try {
+          // Player2 should now be the owner; player1 has been removed.
+          expect(payload.ownerId).toBe(member2Id);
+          expect(payload.members.length).toBe(1);
+          expect(payload.members[0].id).toBe(member2Id);
+          done();
+        } catch (error) {
+          done(error);
+        }
+      });
+
+      setTimeout(() => {
+        leaveSent = true;
+        clientSocket1.emit('leave-room', {
+          roomId,
+          memberId: member1Id,
+          memberToken: member1Token,
+        });
+      }, 500);
+    }, 10000);
+  });
+
 });

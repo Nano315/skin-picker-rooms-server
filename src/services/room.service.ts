@@ -26,8 +26,19 @@ export class RoomService {
   private static instance: RoomService;
   public rooms = new Map<string, Room>();
   public roomsByCode = new Map<string, Room>();
+  // Monotonic counter feeding `Member.joinedAt`. Combined with `Date.now()`
+  // it gives a value that is both human-readable AND strictly increasing
+  // across same-tick joins (Date.now() resolution is 1ms — too coarse for
+  // tests and theoretically possible in prod under burst joins).
+  private joinSeq = 0;
 
   private constructor() {}
+
+  private nextJoinedAt(): number {
+    // Strictly monotonic per service instance. Used for deterministic owner
+    // transfer order. Not wall-clock — semantically a "join sequence" number.
+    return ++this.joinSeq;
+  }
 
   public static getInstance(): RoomService {
     if (!RoomService.instance) {
@@ -67,6 +78,7 @@ export class RoomService {
       chromaId: 0,
       isReady: false,
       lockedSkin: false,
+      joinedAt: this.nextJoinedAt(),
     };
 
     const room: Room = {
@@ -129,6 +141,7 @@ export class RoomService {
       chromaId: 0,
       isReady: false,
       lockedSkin: false,
+      joinedAt: this.nextJoinedAt(),
     };
 
     room.members.set(memberId, member);
@@ -151,24 +164,58 @@ export class RoomService {
     return true;
   }
 
-  public removeMember(room: Room, memberId: string): { roomClosed: boolean; reason?: string } {
+  public removeMember(
+    room: Room,
+    memberId: string
+  ): { roomClosed: boolean; reason?: string; newOwnerId?: string } {
     const member = room.members.get(memberId);
     if (!member) return { roomClosed: false };
 
+    const wasOwner = memberId === room.ownerId;
     room.members.delete(memberId);
-
-    if (memberId === room.ownerId) {
-      this.closeRoom(room);
-      return { roomClosed: true, reason: "owner-left" };
-    }
 
     if (room.members.size === 0) {
       this.closeRoom(room);
-      return { roomClosed: true, reason: "empty" };
+      return { roomClosed: true, reason: wasOwner ? "owner-left" : "empty" };
+    }
+
+    let newOwnerId: string | undefined;
+    if (wasOwner) {
+      // Promote the oldest remaining member (smallest joinedAt). Deterministic
+      // tiebreak on member.id keeps behavior stable when two joinedAt values
+      // collide (e.g. same-tick joins in a test).
+      const next = Array.from(room.members.values()).sort((a, b) => {
+        if (a.joinedAt !== b.joinedAt) return a.joinedAt - b.joinedAt;
+        return a.id.localeCompare(b.id);
+      })[0];
+      room.ownerId = next.id;
+      newOwnerId = next.id;
+      logger.info(`[Owner] Room ${room.code}: ${member.name} left, ${next.name} promoted`);
     }
 
     this.recomputeSynergy(room);
-    return { roomClosed: false };
+    return { roomClosed: false, newOwnerId };
+  }
+
+  /**
+   * Owner-initiated removal of another member. Authorization is checked at the
+   * socket layer; this method only validates that the action is well-formed
+   * (target exists, target is not the owner). The actual member removal —
+   * including auto-promotion of a new owner if the room ever reaches an
+   * inconsistent state — reuses `removeMember`.
+   */
+  public kickMember(
+    room: Room,
+    targetMemberId: string
+  ): { ok: true } | { ok: false; reason: "self" | "not_found" } {
+    if (targetMemberId === room.ownerId) {
+      return { ok: false, reason: "self" };
+    }
+    if (!room.members.has(targetMemberId)) {
+      return { ok: false, reason: "not_found" };
+    }
+    this.removeMember(room, targetMemberId);
+    return { ok: true };
   }
 
   private closeRoom(room: Room) {
@@ -678,6 +725,7 @@ export class RoomService {
             chromaId: config.chromaId ?? 0,
             isReady: true,
             lockedSkin: false,
+            joinedAt: this.nextJoinedAt(),
             options: [] // Bots have no options for now
         };
         room.members.set(memberId, bot);
