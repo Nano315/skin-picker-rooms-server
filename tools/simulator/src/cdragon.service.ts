@@ -181,6 +181,63 @@ export function getSkinLineForSkin(
   return skinToLineCache.get(skinId) ?? null;
 }
 
+// --- Per-champion skin-line index (used by auto-draft) --------------------
+
+/**
+ * Per-champion summary: every themed skin line the champion has at least one
+ * skin in, plus the total skin count (proxy for chroma richness).
+ */
+export interface ChampionSkinLineInfo {
+  lines: Set<number>;
+  skinCount: number;
+}
+
+let championSkinLineCache: Map<number, ChampionSkinLineInfo> | null = null;
+
+/**
+ * Build (and cache) a `championId → { lines, skinCount }` map by walking
+ * every entry in `skins.json` once. Skin IDs follow the convention
+ * `championId * 1000 + n`, so the champion is recoverable from the skin
+ * key itself — no extra champion-summary lookup needed. The "Base" skin
+ * line (id=1) is filtered out because every champion is in it and it
+ * provides no useful synergy signal.
+ */
+export async function fetchChampionSkinLineMap(): Promise<
+  Map<number, ChampionSkinLineInfo>
+> {
+  if (championSkinLineCache) return championSkinLineCache;
+
+  const skinsRaw = await fetchJson<
+    Record<
+      string,
+      { id: number; name: string; skinLines?: Array<{ id: number }> }
+    >
+  >(`${CDRAGON_BASE}/skins.json`);
+
+  const map = new Map<number, ChampionSkinLineInfo>();
+
+  for (const [skinIdStr, skin] of Object.entries(skinsRaw)) {
+    const skinId = parseInt(skinIdStr, 10);
+    if (isNaN(skinId)) continue;
+    const championId = Math.floor(skinId / 1000);
+    if (championId <= 0) continue;
+
+    let info = map.get(championId);
+    if (!info) {
+      info = { lines: new Set<number>(), skinCount: 0 };
+      map.set(championId, info);
+    }
+    info.skinCount++;
+
+    for (const sl of skin.skinLines ?? []) {
+      if (sl.id !== 1) info.lines.add(sl.id);
+    }
+  }
+
+  championSkinLineCache = map;
+  return map;
+}
+
 export async function fetchChromaColor(
   chromaId: number,
   championId: number

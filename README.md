@@ -46,7 +46,7 @@ npm install
 npm run dev             # ts-node hot-reload on src/server.ts
 npm test                # Jest unit + integration tests
 npm run test:coverage
-npm run simulator       # local load simulator for socket flows
+npm run simulator       # interactive socket simulator (see tools/simulator/README.md)
 ```
 
 Build and run:
