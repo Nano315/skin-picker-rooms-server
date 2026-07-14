@@ -3,7 +3,7 @@ import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { logger } from "./utils/logger";
 import { createSafeHandler, assertMemberAuth } from "./utils/socketHelpers";
 import { AppError, ErrorCodes } from "./utils/errors";
@@ -68,12 +68,23 @@ app.use(express.json());
 // Rate limiting — disabled in tests to avoid flakiness when running many requests in sequence.
 const RATE_LIMIT_DISABLED = process.env.NODE_ENV === "test" || process.env.DISABLE_RATE_LIMIT === "true";
 
+// Derrière Cloudflare Tunnel, l'IP TCP vue par Express est celle du connecteur
+// cloudflared : l'IP réelle du client arrive dans l'en-tête CF-Connecting-IP.
+// On indexe les limiteurs dessus (repli sur req.ip en accès direct/dev).
+// L'origine n'étant joignable QUE via le tunnel, l'en-tête n'est pas falsifiable.
+const clientIpKey = (req: express.Request): string => {
+  const cfIp = req.headers["cf-connecting-ip"];
+  const ip = (typeof cfIp === "string" && cfIp.length > 0 ? cfIp : req.ip) ?? "";
+  return ipKeyGenerator(ip);
+};
+
 // Global baseline applied to every route, keyed by client IP.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIpKey,
   skip: () => RATE_LIMIT_DISABLED,
 });
 app.use(limiter);
@@ -85,6 +96,7 @@ const createRoomLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many rooms created, try again later" },
+  keyGenerator: clientIpKey,
   skip: () => RATE_LIMIT_DISABLED,
 });
 
@@ -92,6 +104,7 @@ const createRoomLimiter = rateLimit({
 const joinRoomLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
+  keyGenerator: clientIpKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many join attempts, try again later" },
