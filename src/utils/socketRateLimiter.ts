@@ -20,17 +20,29 @@ const GLOBAL_CAPACITY = 60;
 const GLOBAL_REFILL_PER_SEC = 20;
 
 /**
- * Evenements dont le traitement est couteux cote serveur (recalcul de synergie
- * et/ou rediffusion a toute la room). Ils meritent un seau bien plus etroit.
+ * Evenements dont le traitement est couteux cote serveur : ils declenchent un
+ * recalcul de synergie et/ou une generation de picks rediffusee a toute la room.
+ *
+ * `update-selection` en est volontairement ABSENT. Il ne recalcule pas la
+ * synergie (il ecrit des champs puis rediffuse l'etat), et surtout il est emis
+ * a CHAQUE changement de selection sans debounce cote client
+ * (`useRooms.ts`, effet sur `[joined, selection]`). Le classer ici throttlait un
+ * joueur qui enchaine les rerolls — c'est-a-dire l'interaction principale de
+ * l'application. Il reste couvert par le seau global.
  */
 const EXPENSIVE_EVENTS = new Set([
   "owned-options",
   "request-group-reroll",
   "apply-skin-line-synergy",
-  "update-selection",
 ]);
-const EXPENSIVE_CAPACITY = 12;
-const EXPENSIVE_REFILL_PER_SEC = 3;
+/**
+ * Ces trois evenements sont declenches par un clic. La capacite laisse de la
+ * marge a un utilisateur impatient, tout en bornant un client abusif : au-dela,
+ * la protection releve d'une limite de connexions par IP au niveau de
+ * l'infrastructure, pas d'un compteur par socket.
+ */
+const EXPENSIVE_CAPACITY = 20;
+const EXPENSIVE_REFILL_PER_SEC = 5;
 
 /** `identify` reconstruit la presence et notifie les amis : strictement borne. */
 const IDENTIFY_CAPACITY = 5;

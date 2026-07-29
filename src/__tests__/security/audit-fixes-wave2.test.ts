@@ -124,8 +124,27 @@ describe("Audit vague 2 — non-regression", () => {
       const rl = limiter();
       let allowed = 0;
       for (let i = 0; i < 100; i++) if (rl.allow("owned-options")) allowed++;
-      // Seau "expensive" : capacite 12.
-      expect(allowed).toBeLessThanOrEqual(12);
+      // Seau "expensive" : capacite 20.
+      expect(allowed).toBeLessThanOrEqual(20);
+    });
+
+    // Regression ciblee : `update-selection` est emis a chaque changement de
+    // selection sans debounce cote client. Le placer dans le seau "expensive"
+    // throttlait un joueur qui enchaine les rerolls.
+    it("ne throttle pas update-selection plus severement que le seau global", () => {
+      const rl = limiter();
+      let allowed = 0;
+      for (let i = 0; i < 40; i++) if (rl.allow("update-selection")) allowed++;
+      // Doit atteindre la capacite globale (60), pas le plafond "expensive".
+      expect(allowed).toBe(40);
+    });
+
+    it("laisse passer une rafale de rerolls plausible pour un humain", () => {
+      const rl = limiter();
+      let allowed = 0;
+      // ~15 clics rapides sur reroll : doit passer entierement.
+      for (let i = 0; i < 15; i++) if (rl.allow("request-group-reroll")) allowed++;
+      expect(allowed).toBe(15);
     });
 
     it("le seau global ne peut pas etre contourne en alternant les evenements", () => {
