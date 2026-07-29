@@ -4,6 +4,7 @@ import { RoomService, verifyMemberToken } from "../services/room.service";
 import { logger } from "./logger";
 import { AppError, formatErrorResponse, ErrorCodes } from "./errors";
 import type { ValidationResult } from "./validation";
+import type { SocketRateLimiter } from "./socketRateLimiter";
 
 /**
  * Throws AppError(UNAUTHORIZED) if the provided token does not match the
@@ -99,7 +100,10 @@ export function getRoomAndMemberOrWarn(
  *   socket.on("join-room", safe("join-room", (p) => { ... }, validateJoinRoomPayload));
  * });
  */
-export function createSafeHandler(socket: Socket) {
+export function createSafeHandler(
+  socket: Socket,
+  rateLimiter?: SocketRateLimiter
+) {
   return function safeHandler<T>(
     eventName: string,
     handler: (payload: T) => void | Promise<void>,
@@ -107,6 +111,16 @@ export function createSafeHandler(socket: Socket) {
   ): (payload: unknown) => void {
     return (payload: unknown) => {
       try {
+        // Rate limit AVANT toute autre chose : le but est justement d'eviter
+        // de payer la validation et le traitement sur un flood.
+        if (rateLimiter && !rateLimiter.allow(eventName)) {
+          throw new AppError(
+            ErrorCodes.RATE_LIMITED,
+            "Too many events, slow down",
+            true
+          );
+        }
+
         let typedPayload = payload as T;
 
         if (validate) {

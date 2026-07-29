@@ -7,6 +7,11 @@ node_modules/
 dist/
 build/
 
+# Rapports de couverture (generes par `npm run test:coverage` et par la CI).
+# Ils avaient ete desindexes une premiere fois, puis re-commites faute d'etre
+# ignores ici. Pour les retirer du suivi : `git rm -r --cached coverage`.
+coverage/
+
 # Misc
 .DS_Store
 .env

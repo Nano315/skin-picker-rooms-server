@@ -47,6 +47,26 @@ class PresenceManager {
       return { ok: false, reason: "puuid_taken" };
     }
 
+    // `socketToPuuid` est une relation 1<->1 : si ce socket etait deja identifie
+    // sur un AUTRE puuid, il faut liberer le precedent avant de l'ecraser.
+    //
+    // Sans cela, un socket qui s'identifie en boucle avec des puuid differents
+    // laissait une entree orpheline dans `connections` a chaque tour : fuite
+    // memoire non bornee, et surtout les puuid ainsi squattes restaient "en
+    // ligne" pour toujours — le garde anti-usurpation ci-dessus se retournait
+    // alors contre le vrai proprietaire, qui ne pouvait plus jamais
+    // s'identifier. Le socket restait par ailleurs abonne au canal
+    // `user:<puuid>` de chacun, et interceptait donc leurs invitations.
+    const previousPuuid = this.socketToPuuid.get(socket.id);
+    if (previousPuuid && previousPuuid !== puuid) {
+      this.connections.delete(previousPuuid);
+      this.friendsMap.delete(previousPuuid);
+      socket.leave(`user:${previousPuuid}`);
+      logger.info(
+        `[presence] Socket ${socket.id} re-identified: released previous PUUID ${previousPuuid}`
+      );
+    }
+
     this.connections.set(puuid, {
       socketId: socket.id,
       summonerName,

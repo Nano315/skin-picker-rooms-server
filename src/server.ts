@@ -16,6 +16,7 @@ import {
   validateSetSkinLockPayload,
   validateKickMemberPayload,
 } from "./utils/validation";
+import { createSocketRateLimiter } from "./utils/socketRateLimiter";
 import { AppError, ErrorCodes } from "./utils/errors";
 import {
   registerClientVersion,
@@ -28,7 +29,7 @@ import {
 } from "./utils/versionAdapter";
 import { CURRENT_EVENT_VERSION } from "./types";
 import roomRoutes from "./routes/room.routes";
-import { RoomService } from "./services/room.service";
+import { RoomService, ROOM_SWEEP_INTERVAL_MS } from "./services/room.service";
 import { presenceManager } from "./services/presence.service";
 import type {
   JoinRoomPayload,
@@ -182,11 +183,40 @@ setInterval(() => {
   }
 }, INVITE_CLEANUP_INTERVAL_MS);
 
+/**
+ * Retire du canal Socket.IO TOUS les sockets rattaches a un membre.
+ *
+ * `leave-room` ne faisait quitter que le socket emetteur. Un membre ayant
+ * plusieurs sockets (reconnexion sans `disconnect` propre) laissait donc
+ * derriere lui un auditeur silencieux, qui continuait a recevoir chaque
+ * `room-state` sans figurer dans la liste des membres — donc sans etre
+ * expulsable.
+ */
+function evictMemberSockets(roomId: string, memberId: string): void {
+  void (async () => {
+    try {
+      const sockets = await io.in(roomId).fetchSockets();
+      for (const s of sockets) {
+        const info = socketToMember.get(s.id);
+        if (info?.memberId !== memberId) continue;
+        socketToMember.delete(s.id);
+        s.leave(roomId);
+      }
+    } catch (err) {
+      logger.error(`[leave] Failed to evict sockets of member ${memberId}`, {
+        error: err instanceof Error ? err.message : String(err),
+        roomId,
+      });
+    }
+  })();
+}
+
 function handleMemberLeave(roomId: string, memberId: string, reason: string) {
   const room = roomService.getRoom(roomId);
   if (!room) return;
 
   const result = roomService.removeMember(room, memberId);
+  evictMemberSockets(roomId, memberId);
 
   if (result.roomClosed) {
     // Last member out — notify everyone (owner-left only fires when there's
@@ -213,7 +243,10 @@ io.on("connection", (socket) => {
   );
   logger.info(`[socket] connected ${socket.id} (v${clientVersion})`);
 
-  const safeHandler = createSafeHandler(socket);
+  // Un limiteur par socket : son etat vit dans la closure de la connexion et
+  // disparait donc avec elle, sans map globale a purger.
+  const rateLimiter = createSocketRateLimiter(socket.id);
+  const safeHandler = createSafeHandler(socket, rateLimiter);
 
   socket.on("join-room", safeHandler<JoinRoomPayload>("join-room", ({ roomId, memberId, memberToken }) => {
     const room = roomService.getRoom(roomId);
@@ -232,6 +265,9 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
     socketToMember.set(socket.id, { roomId, memberId });
+    // Le membre n'est plus "en sursis" : son slot ne sera plus recupere par le
+    // balayage.
+    roomService.markMemberConnected(room, memberId);
 
     // Emit versioned room-state
     const serializedRoom = roomService.serializeRoom(room);
@@ -453,6 +489,13 @@ io.on("connection", (socket) => {
 
   socket.on("suggest-color", (payload: SuggestColorPayload, ack?: (response: { success: boolean; error?: string }) => void) => {
     try {
+      // Ce handler n'utilise pas safeHandler (semantique d'ack specifique) :
+      // le rate limit doit donc etre applique explicitement.
+      if (!rateLimiter.allow("suggest-color")) {
+        if (ack) ack({ success: false, error: 'Too many requests' });
+        return;
+      }
+
       if (!payload || typeof payload !== "object") {
         logger.warn(`[suggest-color] Rejected: payload is not an object`);
         if (ack) ack({ success: false, error: 'Invalid payload' });
@@ -681,6 +724,14 @@ io.on("connection", (socket) => {
   // --- Identity Handshake (Story 4.3) ---
   socket.on("identify", (payload: IdentifyPayload) => {
     try {
+      // Handler hors safeHandler : rate limit explicite. `identify` reconstruit
+      // la presence et notifie tous les amis — c'est le levier d'amplification
+      // le plus fort du protocole, et le vecteur du squattage de PUUID.
+      if (!rateLimiter.allow("identify")) {
+        socket.emit("identity-rejected", { reason: "rate_limited" });
+        return;
+      }
+
       const { puuid, summonerName, friends } = payload;
 
       // Validate payload
@@ -735,6 +786,14 @@ io.on("connection", (socket) => {
   // --- Room Invitations (Story 4.5) ---
   socket.on("send-room-invite", (payload: SendRoomInvitePayload) => {
     try {
+      // Handler hors safeHandler : rate limit explicite. Le limiteur par couple
+      // (expediteur, cible) plus bas n'empeche pas d'arroser des milliers de
+      // cibles differentes — celui-ci borne le debit total du socket.
+      if (!rateLimiter.allow("send-room-invite")) {
+        socket.emit("invite-failed", { reason: "rate_limited" });
+        return;
+      }
+
       const { targetPuuid, roomCode } = payload;
 
       if (!isValidPuuid(targetPuuid)) {
@@ -820,6 +879,30 @@ io.on("connection", (socket) => {
     }
   });
 });
+
+// --- Balayage periodique des rooms ---
+// Libere les slots des membres jamais connectes et supprime les rooms
+// abandonnees. `unref()` pour ne pas maintenir le process en vie, et pas de
+// timer du tout en test (les suites declenchent `roomService.sweep()`
+// directement, ce qui est deterministe).
+if (process.env.NODE_ENV !== "test") {
+  const sweepTimer = setInterval(() => {
+    try {
+      const { membersEvicted, roomsClosed } = roomService.sweep();
+      if (membersEvicted > 0 || roomsClosed > 0) {
+        logger.info(
+          `[sweep] ${membersEvicted} membre(s) evince(s), ${roomsClosed} room(s) fermee(s) — ${roomService.rooms.size} restantes`
+        );
+      }
+    } catch (err) {
+      logger.error("[sweep] Balayage en echec", {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    }
+  }, ROOM_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
+}
 
 // --- Filet de securite process ---
 // L'etat des rooms est 100% en memoire : un crash du process detruit les rooms

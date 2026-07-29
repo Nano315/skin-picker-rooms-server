@@ -36,5 +36,11 @@
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.8",
+    "minimatch": "^10.2.6",
+    "glob": "^13.0.6",
+    "test-exclude": "^8.0.0"
   }
 }

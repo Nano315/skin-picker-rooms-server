@@ -13,6 +13,39 @@ const GROUP_HISTORY_LIMIT = 3;
 const BOT_NAME_PREFIX_RE = /^[A-Za-z0-9 _-]{1,24}$/;
 const BOT_NAME_SUFFIX_RE = /^\d{1,4}$/;
 
+/**
+ * Plafond du nombre de couleurs distinctes prises en compte par la synergie.
+ * Une palette de chromas reelle en compte quelques dizaines ; 256 laisse une
+ * marge confortable tout en bornant le cout du calcul.
+ */
+const MAX_DISTINCT_AURA_COLORS = 256;
+
+/**
+ * Plafond global du nombre de rooms simultanees. L'etat etant entierement en
+ * memoire, une creation en boucle faisait croitre les Map sans borne.
+ */
+const MAX_ROOMS = 5000;
+
+/** Une room sans activite depuis 6 h est consideree abandonnee. */
+const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Delai laisse a un membre issu de `POST /rooms/join` pour attacher un socket.
+ * Au-dela, son slot est libere.
+ */
+const PENDING_MEMBER_TTL_MS = 2 * 60 * 1000;
+
+/** Periode de balayage, pilotee par server.ts. */
+export const ROOM_SWEEP_INTERVAL_MS = 60 * 1000;
+
+/**
+ * Normalise un pseudo pour la comparaison d'exclusion : insensible a la casse
+ * et aux espaces de bord.
+ */
+function normalizeName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 function generateMemberToken(): string {
   return randomBytes(32).toString("hex");
 }
@@ -73,6 +106,18 @@ export class RoomService {
   }
 
   public createRoom(ownerName: string): { room: Room; member: Member } {
+    if (this.rooms.size >= MAX_ROOMS) {
+      logger.error(
+        `[rooms] Plafond global atteint (${MAX_ROOMS}) — creation refusee`
+      );
+      throw new AppError(
+        ErrorCodes.ROOM_FULL,
+        "Server at capacity, try again later",
+        true,
+        { roomCount: this.rooms.size }
+      );
+    }
+
     const roomId = randomUUID();
     const code = this.generateRoomCode();
     const ownerId = randomUUID();
@@ -90,6 +135,7 @@ export class RoomService {
       joinedAt: this.nextJoinedAt(),
     };
 
+    const now = Date.now();
     const room: Room = {
       id: roomId,
       code,
@@ -97,11 +143,17 @@ export class RoomService {
       members: new Map([[ownerId, owner]]),
       history: [],
       skinLineHistory: [],
+      createdAt: now,
+      lastActivityAt: now,
+      // Le proprietaire aussi doit attacher un socket : une room creee en REST
+      // et jamais rejointe ne doit pas survivre au balayage.
+      pendingMembers: new Map([[ownerId, now]]),
+      bannedNames: new Set(),
     };
 
     this.rooms.set(roomId, room);
     this.roomsByCode.set(code, room);
-    
+
     logger.info(`Room created: ${roomId} (Code: ${code}) by ${ownerName}`);
     return { room, member: owner };
   }
@@ -135,6 +187,13 @@ export class RoomService {
       return { error: "Room not found", status: 404 };
     }
 
+    if (room.bannedNames.has(normalizeName(memberName))) {
+      logger.warn(
+        `[join] Refus: ${memberName} a ete exclu de la room ${room.code}`
+      );
+      return { error: "You have been removed from this room", status: 403 };
+    }
+
     if (room.members.size >= 5) {
       return { error: "Room is full", status: 403 };
     }
@@ -154,10 +213,84 @@ export class RoomService {
     };
 
     room.members.set(memberId, member);
+    // Le membre n'existe pour l'instant qu'en REST : tant qu'aucun socket ne
+    // s'attache, son slot reste revocable par le balayage.
+    room.pendingMembers.set(memberId, Date.now());
+    room.lastActivityAt = Date.now();
     // Recalculate synergy immediately? Not necessary as they have no options yet.
-    
+
     logger.info(`Member ${memberName} (${memberId}) joined room ${room.id}`);
     return { room, member };
+  }
+
+  /**
+   * Marque un membre comme reellement connecte : son socket s'est attache via
+   * l'evenement `join-room`. Il sort alors du sursis de `pendingMembers`.
+   */
+  public markMemberConnected(room: Room, memberId: string): void {
+    room.pendingMembers.delete(memberId);
+    room.lastActivityAt = Date.now();
+  }
+
+  /** Reinitialise le TTL de la room sur une action significative. */
+  public touchRoom(room: Room): void {
+    room.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Balayage : libere les slots des membres jamais connectes et supprime les
+   * rooms abandonnees. Exporte pour pouvoir etre declenche deterministiquement
+   * dans les tests, sans dependre du timer.
+   *
+   * @param now horodatage injectable (tests)
+   * @returns compteurs pour les logs/metrics
+   */
+  public sweep(now = Date.now()): { membersEvicted: number; roomsClosed: number } {
+    let membersEvicted = 0;
+    let roomsClosed = 0;
+
+    for (const room of Array.from(this.rooms.values())) {
+      let evictedHere = 0;
+
+      // 1. Membres qui n'ont jamais attache de socket
+      for (const [memberId, since] of Array.from(room.pendingMembers.entries())) {
+        if (now - since < PENDING_MEMBER_TTL_MS) continue;
+        room.pendingMembers.delete(memberId);
+        if (room.members.delete(memberId)) {
+          evictedHere++;
+          membersEvicted++;
+          logger.info(
+            `[sweep] Room ${room.code}: membre ${memberId} jamais connecte, slot libere`
+          );
+        }
+      }
+
+      // 2. Room vide (plus aucun membre apres eviction) ou inactive depuis trop
+      //    longtemps.
+      const expired = now - room.lastActivityAt >= ROOM_TTL_MS;
+      if (room.members.size === 0 || expired) {
+        this.closeRoom(room);
+        roomsClosed++;
+        logger.info(
+          `[sweep] Room ${room.code} supprimee (${room.members.size === 0 ? "vide" : "inactive"})`
+        );
+        continue;
+      }
+
+      // 3. Le proprietaire a pu etre evince : promouvoir le plus ancien restant.
+      if (!room.members.has(room.ownerId)) {
+        const next = Array.from(room.members.values()).sort((a, b) => {
+          if (a.joinedAt !== b.joinedAt) return a.joinedAt - b.joinedAt;
+          return a.id.localeCompare(b.id);
+        })[0];
+        room.ownerId = next.id;
+        logger.info(`[sweep] Room ${room.code}: nouveau proprietaire ${next.name}`);
+      }
+
+      if (evictedHere > 0) this.recomputeSynergy(room);
+    }
+
+    return { membersEvicted, roomsClosed };
   }
 
   /**
@@ -220,9 +353,14 @@ export class RoomService {
     if (targetMemberId === room.ownerId) {
       return { ok: false, reason: "self" };
     }
-    if (!room.members.has(targetMemberId)) {
+    const target = room.members.get(targetMemberId);
+    if (!target) {
       return { ok: false, reason: "not_found" };
     }
+    // Sans cette liste, le kick n'avait aucun effet durable : le membre exclu
+    // rappelait POST /rooms/join avec le meme code et revenait aussitot.
+    room.bannedNames.add(normalizeName(target.name));
+    room.pendingMembers.delete(targetMemberId);
     this.removeMember(room, targetMemberId);
     return { ok: true };
   }
@@ -243,13 +381,28 @@ export class RoomService {
       return;
     }
 
+    // La boucle de synergie qui suit est en O(couleurs x membres x options).
+    // `auraColor` etant fourni par le client, sa CARDINALITE est un levier
+    // direct sur le cout : sans plafond, 5 membres x 2000 options de couleurs
+    // toutes distinctes suffisaient a bloquer l'event loop. La validation de
+    // format borne la forme des valeurs, pas leur nombre — d'ou ce cap.
     const allColors = new Set<string>();
-    for (const m of readyMembers) {
+    let colorsTruncated = false;
+    outer: for (const m of readyMembers) {
       for (const opt of m.options!) {
         if (opt.auraColor) {
+          if (allColors.size >= MAX_DISTINCT_AURA_COLORS && !allColors.has(opt.auraColor)) {
+            colorsTruncated = true;
+            break outer;
+          }
           allColors.add(opt.auraColor);
         }
       }
+    }
+    if (colorsTruncated) {
+      logger.warn(
+        `[synergy] Room ${room.code}: plus de ${MAX_DISTINCT_AURA_COLORS} couleurs distinctes, calcul tronque`
+      );
     }
 
     const synergies: ColorSynergy[] = [];

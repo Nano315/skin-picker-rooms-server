@@ -148,6 +148,32 @@ export type Room = {
   history: ChromaCombination[];
   // Story 6.2: skin line history
   skinLineHistory: SkinLineCombination[];
+
+  // --- Cycle de vie (interne, jamais serialise vers les clients) ---
+  // Ces champs sont volontairement portes par Room et non par Member :
+  // `serializeRoom` reconstruit chaque membre par spread (`...publicMember`),
+  // donc tout champ ajoute a Member serait automatiquement diffuse et
+  // changerait le format de fil de `room-state`.
+  /** Horodatage de creation, pour le balayage des rooms abandonnees. */
+  createdAt: number;
+  /** Derniere action significative ; reinitialise le TTL. */
+  lastActivityAt: number;
+  /**
+   * Membres crees par `POST /rooms/join` mais dont aucun socket ne s'est encore
+   * attache (memberId -> horodatage). Sans cela, 5 requetes REST saturaient une
+   * room definitivement : le membre n'avait aucun cycle de vie.
+   */
+  pendingMembers: Map<string, number>;
+  /**
+   * Noms exclus par le proprietaire (normalises en minuscules).
+   *
+   * Il n'y a pas d'identite forte cote serveur : le memberId est regenere a
+   * chaque `POST /rooms/join`, donc un exclu revenait immediatement avec le
+   * meme code. Le nom est le seul element stable dont on dispose. Ce n'est pas
+   * infalsifiable — l'exclu peut changer de pseudo — mais cela rend le kick
+   * effectif au lieu d'etre purement cosmetique.
+   */
+  bannedNames: Set<string>;
 };
 
 // Re-export socket event types for convenience

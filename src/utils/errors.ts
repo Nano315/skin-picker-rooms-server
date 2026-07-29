@@ -7,6 +7,7 @@ export const ErrorCodes = {
   INVALID_PAYLOAD: "INVALID_PAYLOAD",
   UNAUTHORIZED: "UNAUTHORIZED",
   ROOM_FULL: "ROOM_FULL",
+  RATE_LIMITED: "RATE_LIMITED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
 
@@ -49,6 +50,7 @@ export const UserFriendlyMessages: Record<ErrorCode, string> = {
   [ErrorCodes.INVALID_PAYLOAD]: "Invalid request data",
   [ErrorCodes.UNAUTHORIZED]: "You are not authorized to perform this action",
   [ErrorCodes.ROOM_FULL]: "Room is full",
+  [ErrorCodes.RATE_LIMITED]: "Too many requests, please slow down",
   [ErrorCodes.INTERNAL_ERROR]: "An unexpected error occurred",
 };
 

@@ -56,6 +56,31 @@ function isMemberToken(value: unknown): value is string {
 }
 
 /**
+ * Formats acceptes pour `auraColor`.
+ *
+ * Le client ne produit qu'une seule forme : `hexToRgba()` (lcu.ipc.ts) renvoie
+ * toujours `rgba(r,g,b,a)`. On tolere aussi `#RRGGBB` par robustesse si la
+ * source de couleur evolue. Les deux regex sont constantes et lineaires
+ * (quantificateurs bornes, aucune alternance imbriquee) : pas de ReDoS.
+ *
+ * L'interet est double : borner l'espace de valeurs cote serveur, et empecher
+ * qu'une chaine arbitraire d'un pair (`red;background:url(...)`) ne se retrouve
+ * injectee dans un style inline cote renderer.
+ */
+const AURA_COLOR_RGBA_RE =
+  /^rgba?\((\d{1,3}),(\d{1,3}),(\d{1,3})(,(0|1|0?\.\d{1,4}))?\)$/;
+const AURA_COLOR_HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function isValidAuraColor(value: string): boolean {
+  if (AURA_COLOR_HEX_RE.test(value)) return true;
+  const m = AURA_COLOR_RGBA_RE.exec(value);
+  if (!m) return false;
+  // Les composantes doivent tenir dans 0-255 : la regex ne borne que le nombre
+  // de chiffres.
+  return [m[1], m[2], m[3]].every((c) => Number(c) <= 255);
+}
+
+/**
  * Valide un element de `options[]`.
  *
  * Indispensable : `recomputeSynergy` deferences `opt.auraColor` et
@@ -72,13 +97,17 @@ function isGroupSkinOption(value: unknown): value is GroupSkinOption {
   if (!isBoundedInt(o.skinId) || !isBoundedInt(o.chromaId)) return false;
 
   // auraColor : `null` est legitime (skin sans aura), mais pas `undefined`
-  // ni un objet. Borne en longueur car la valeur alimente la cardinalite de
-  // la boucle externe de recomputeSynergy.
-  if (
-    o.auraColor !== null &&
-    !(typeof o.auraColor === "string" && o.auraColor.length <= MAX_COLOR_LENGTH)
-  ) {
-    return false;
+  // ni un objet. Le format est verifie strictement — la valeur alimente la
+  // cardinalite de la boucle externe de recomputeSynergy cote serveur, et un
+  // style inline cote renderer.
+  if (o.auraColor !== null) {
+    if (
+      typeof o.auraColor !== "string" ||
+      o.auraColor.length > MAX_COLOR_LENGTH ||
+      !isValidAuraColor(o.auraColor)
+    ) {
+      return false;
+    }
   }
 
   if (o.skinLineId !== undefined && !isBoundedInt(o.skinLineId)) return false;
