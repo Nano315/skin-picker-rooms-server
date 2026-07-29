@@ -3,6 +3,7 @@ import type { Room, Member } from "../types";
 import { RoomService, verifyMemberToken } from "../services/room.service";
 import { logger } from "./logger";
 import { AppError, formatErrorResponse, ErrorCodes } from "./errors";
+import type { ValidationResult } from "./validation";
 
 /**
  * Throws AppError(UNAUTHORIZED) if the provided token does not match the
@@ -83,23 +84,44 @@ export function getRoomAndMemberOrWarn(
  * Creates a safe handler factory bound to a specific socket.
  * Use this to wrap Socket.io event handlers with try-catch error handling.
  *
+ * Le troisieme parametre `validate` porte la validation du payload au niveau du
+ * wrapper plutot que dans chaque handler : c'est le seul endroit ou l'on ne
+ * peut pas l'oublier. Un payload rejete leve une AppError(INVALID_PAYLOAD),
+ * traitee comme n'importe quelle erreur operationnelle — le handler metier
+ * n'est jamais appele, et ne voit donc que des donnees deja typees et bornees.
+ *
  * @param socket - The Socket.io socket instance
  * @returns A function that wraps handlers with error handling
  *
  * @example
  * io.on("connection", (socket) => {
  *   const safe = createSafeHandler(socket);
- *   socket.on("join-room", safe("join-room", (payload) => { ... }));
+ *   socket.on("join-room", safe("join-room", (p) => { ... }, validateJoinRoomPayload));
  * });
  */
 export function createSafeHandler(socket: Socket) {
   return function safeHandler<T>(
     eventName: string,
-    handler: (payload: T) => void | Promise<void>
-  ): (payload: T) => void {
-    return (payload: T) => {
+    handler: (payload: T) => void | Promise<void>,
+    validate?: (payload: unknown, eventName?: string) => ValidationResult<T>
+  ): (payload: unknown) => void {
+    return (payload: unknown) => {
       try {
-        const result = handler(payload);
+        let typedPayload = payload as T;
+
+        if (validate) {
+          const validation = validate(payload, eventName);
+          if (!validation.valid) {
+            throw new AppError(
+              ErrorCodes.INVALID_PAYLOAD,
+              `Invalid ${eventName} payload`,
+              true
+            );
+          }
+          typedPayload = validation.payload;
+        }
+
+        const result = handler(typedPayload);
 
         // Handle async handlers
         if (result instanceof Promise) {
@@ -112,6 +134,20 @@ export function createSafeHandler(socket: Socket) {
       }
     };
   };
+}
+
+/**
+ * Retire les champs secrets d'un payload avant de le logger.
+ * Le `memberToken` est le seul secret d'authentification du protocole : il ne
+ * doit jamais atteindre les fichiers de log winston.
+ */
+function redactPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const clone: Record<string, unknown> = {
+    ...(payload as Record<string, unknown>),
+  };
+  if ("memberToken" in clone) clone.memberToken = "[redacted]";
+  return clone;
 }
 
 /**
@@ -141,7 +177,7 @@ function handleError<T>(
     logger.error(`[${eventName}] Unexpected error: ${errorMessage}`, {
       error: errorMessage,
       stack: errorStack,
-      payload,
+      payload: redactPayload(payload),
       socketId: socket.id,
     });
 

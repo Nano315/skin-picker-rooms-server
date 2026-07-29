@@ -110,6 +110,9 @@ describe('Socket.io Integration Flow', () => {
             roomId,
             memberId: member1Id,
             memberToken: member1Token,
+            // `championId` fait partie du contrat UpdateSelectionPayload et est
+            // toujours envoye par le client reel (roomsClient.sendSelection).
+            championId: 1,
             skinId: 123,
             chromaId: 456,
         });
@@ -158,6 +161,7 @@ describe('Socket.io Integration Flow', () => {
             roomId,
             memberId: member1Id,
             memberToken: member1Token,
+            championId: 1,
             skinId: 111,
             chromaId: 1111,
         });
@@ -165,6 +169,7 @@ describe('Socket.io Integration Flow', () => {
             roomId,
             memberId: member2Id,
             memberToken: member2Token,
+            championId: 2,
             skinId: 222,
             chromaId: 2222,
         });

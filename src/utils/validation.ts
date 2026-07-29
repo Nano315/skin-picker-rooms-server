@@ -6,17 +6,28 @@ import type {
   OwnedOptionsPayload,
   RequestGroupRerollPayload,
   SuggestColorPayload,
+  ApplySkinLineSynergyPayload,
+  SetSkinLockPayload,
+  KickMemberPayload,
+  GroupSkinOption,
 } from "../types";
 
 /**
  * Validation result type.
  */
-type ValidationResult<T> = { valid: true; payload: T } | { valid: false };
+export type ValidationResult<T> = { valid: true; payload: T } | { valid: false };
 
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 128;
 const MAX_ENTITY_ID = 1_000_000_000;
 const MAX_TOKEN_LENGTH = 256;
+const MAX_COLOR_LENGTH = 64;
+/**
+ * Borne le nombre d'options par membre. Chaque `room-state` rediffuse les
+ * options de tous les membres a tous les membres : la valeur plafonne autant
+ * l'amplification reseau que le cout de `recomputeSynergy`.
+ */
+const MAX_OPTIONS = 2000;
 
 /**
  * Validates that a value is a non-empty, bounded string.
@@ -42,6 +53,60 @@ function isBoundedInt(value: unknown, max = MAX_ENTITY_ID): value is number {
  */
 function isMemberToken(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_TOKEN_LENGTH;
+}
+
+/**
+ * Valide un element de `options[]`.
+ *
+ * Indispensable : `recomputeSynergy` deferences `opt.auraColor` et
+ * `opt.skinLineId` sans garde. Un seul `null` dans le tableau suffisait a lever
+ * une TypeError, capturee dans les handlers mais PAS dans `disconnect` — donc a
+ * tuer le process. Valider le conteneur ne suffit pas, il faut valider chaque
+ * element.
+ */
+function isGroupSkinOption(value: unknown): value is GroupSkinOption {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+
+  const o = value as Record<string, unknown>;
+
+  if (!isBoundedInt(o.skinId) || !isBoundedInt(o.chromaId)) return false;
+
+  // auraColor : `null` est legitime (skin sans aura), mais pas `undefined`
+  // ni un objet. Borne en longueur car la valeur alimente la cardinalite de
+  // la boucle externe de recomputeSynergy.
+  if (
+    o.auraColor !== null &&
+    !(typeof o.auraColor === "string" && o.auraColor.length <= MAX_COLOR_LENGTH)
+  ) {
+    return false;
+  }
+
+  if (o.skinLineId !== undefined && !isBoundedInt(o.skinLineId)) return false;
+  if (
+    o.skinLineName !== undefined &&
+    !(typeof o.skinLineName === "string" && o.skinLineName.length <= MAX_NAME_LENGTH)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Valide le triplet d'identification present sur tous les payloads authentifies.
+ */
+function hasValidIdentity(
+  p: Record<string, unknown>
+): p is Record<string, unknown> & {
+  roomId: string;
+  memberId: string;
+  memberToken: string;
+} {
+  return (
+    isNonEmptyString(p.roomId) &&
+    isNonEmptyString(p.memberId) &&
+    isMemberToken(p.memberToken)
+  );
 }
 
 /**
@@ -141,14 +206,20 @@ export function validateOwnedOptionsPayload(
   const p = payload as Record<string, unknown>;
 
   if (
-    !isNonEmptyString(p.roomId) ||
-    !isNonEmptyString(p.memberId) ||
-    !isMemberToken(p.memberToken) ||
+    !hasValidIdentity(p) ||
     !isBoundedInt(p.championId) ||
     !Array.isArray(p.options) ||
-    p.options.length > 10_000
+    p.options.length > MAX_OPTIONS
   ) {
     logger.warn(`[${eventName}] Invalid payload: missing or out-of-range required fields`);
+    return { valid: false };
+  }
+
+  // Valider CHAQUE element : c'est la garde qui empeche un `null` (ou tout
+  // objet malforme) d'atteindre recomputeSynergy et de tuer le process.
+  const badIndex = p.options.findIndex((opt) => !isGroupSkinOption(opt));
+  if (badIndex !== -1) {
+    logger.warn(`[${eventName}] Invalid payload: malformed option at index ${badIndex}`);
     return { valid: false };
   }
 
@@ -163,7 +234,7 @@ export function validateOwnedOptionsPayload(
         typeof p.championAlias === "string" && p.championAlias.length <= MAX_NAME_LENGTH
           ? p.championAlias
           : undefined,
-      options: p.options,
+      options: p.options as GroupSkinOption[],
     },
   };
 }
@@ -183,13 +254,23 @@ export function validateRequestGroupRerollPayload(
   const p = payload as Record<string, unknown>;
 
   if (
-    !isNonEmptyString(p.roomId) ||
-    !isNonEmptyString(p.memberId) ||
-    !isMemberToken(p.memberToken) ||
+    !hasValidIdentity(p) ||
     p.type !== "sameColor" ||
-    !isNonEmptyString(p.color, 64)
+    !isNonEmptyString(p.color, MAX_COLOR_LENGTH)
   ) {
     logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    return { valid: false };
+  }
+
+  // `skinLineId` et `sourceMemberId` sont optionnels mais REELLEMENT utilises
+  // par le handler (applyColorSynergy + payload group-apply-combo) : les
+  // laisser passer, sous peine de casser les rerolls de skin line.
+  if (p.skinLineId !== undefined && !isBoundedInt(p.skinLineId)) {
+    logger.warn(`[${eventName}] Invalid payload: bad skinLineId`);
+    return { valid: false };
+  }
+  if (p.sourceMemberId !== undefined && !isNonEmptyString(p.sourceMemberId)) {
+    logger.warn(`[${eventName}] Invalid payload: bad sourceMemberId`);
     return { valid: false };
   }
 
@@ -201,6 +282,8 @@ export function validateRequestGroupRerollPayload(
       memberToken: p.memberToken,
       type: p.type,
       color: p.color,
+      skinLineId: p.skinLineId as number | undefined,
+      sourceMemberId: p.sourceMemberId as string | undefined,
     },
   };
 }
@@ -220,9 +303,7 @@ export function validateSuggestColorPayload(
   const p = payload as Record<string, unknown>;
 
   if (
-    !isNonEmptyString(p.roomId) ||
-    !isNonEmptyString(p.memberId) ||
-    !isMemberToken(p.memberToken) ||
+    !hasValidIdentity(p) ||
     !isBoundedInt(p.skinId) ||
     !isBoundedInt(p.chromaId)
   ) {
@@ -238,6 +319,96 @@ export function validateSuggestColorPayload(
       memberToken: p.memberToken,
       skinId: p.skinId,
       chromaId: p.chromaId,
+    },
+  };
+}
+
+/**
+ * Validates ApplySkinLineSynergyPayload.
+ */
+export function validateApplySkinLineSynergyPayload(
+  payload: unknown,
+  eventName = "apply-skin-line-synergy"
+): ValidationResult<ApplySkinLineSynergyPayload> {
+  if (!payload || typeof payload !== "object") {
+    logger.warn(`[${eventName}] Invalid payload: not an object`);
+    return { valid: false };
+  }
+
+  const p = payload as Record<string, unknown>;
+
+  if (!hasValidIdentity(p) || !isBoundedInt(p.skinLineId)) {
+    logger.warn(`[${eventName}] Invalid payload: missing or out-of-range required fields`);
+    return { valid: false };
+  }
+
+  return {
+    valid: true,
+    payload: {
+      roomId: p.roomId,
+      memberId: p.memberId,
+      memberToken: p.memberToken,
+      skinLineId: p.skinLineId,
+    },
+  };
+}
+
+/**
+ * Validates SetSkinLockPayload.
+ */
+export function validateSetSkinLockPayload(
+  payload: unknown,
+  eventName = "set-skin-lock"
+): ValidationResult<SetSkinLockPayload> {
+  if (!payload || typeof payload !== "object") {
+    logger.warn(`[${eventName}] Invalid payload: not an object`);
+    return { valid: false };
+  }
+
+  const p = payload as Record<string, unknown>;
+
+  if (!hasValidIdentity(p) || typeof p.locked !== "boolean") {
+    logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    return { valid: false };
+  }
+
+  return {
+    valid: true,
+    payload: {
+      roomId: p.roomId,
+      memberId: p.memberId,
+      memberToken: p.memberToken,
+      locked: p.locked,
+    },
+  };
+}
+
+/**
+ * Validates KickMemberPayload.
+ */
+export function validateKickMemberPayload(
+  payload: unknown,
+  eventName = "kick-member"
+): ValidationResult<KickMemberPayload> {
+  if (!payload || typeof payload !== "object") {
+    logger.warn(`[${eventName}] Invalid payload: not an object`);
+    return { valid: false };
+  }
+
+  const p = payload as Record<string, unknown>;
+
+  if (!hasValidIdentity(p) || !isNonEmptyString(p.targetMemberId)) {
+    logger.warn(`[${eventName}] Invalid payload: missing required fields`);
+    return { valid: false };
+  }
+
+  return {
+    valid: true,
+    payload: {
+      roomId: p.roomId,
+      memberId: p.memberId,
+      memberToken: p.memberToken,
+      targetMemberId: p.targetMemberId,
     },
   };
 }

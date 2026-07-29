@@ -6,6 +6,16 @@ import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { logger } from "./utils/logger";
 import { createSafeHandler, assertMemberAuth } from "./utils/socketHelpers";
+import {
+  validateJoinRoomPayload,
+  validateLeaveRoomPayload,
+  validateUpdateSelectionPayload,
+  validateOwnedOptionsPayload,
+  validateRequestGroupRerollPayload,
+  validateApplySkinLineSynergyPayload,
+  validateSetSkinLockPayload,
+  validateKickMemberPayload,
+} from "./utils/validation";
 import { AppError, ErrorCodes } from "./utils/errors";
 import {
   registerClientVersion,
@@ -63,7 +73,11 @@ const corsOptions: cors.CorsOptions = {
 
 app.use(helmet());
 app.use(cors(corsOptions));
-app.use(express.json());
+// 16 ko : tous les bodys legitimes (create/join/bots) tiennent en quelques
+// centaines d'octets. La limite par defaut d'express.json() est de 100 ko, ce
+// qui laissait passer des champs `name` de plusieurs dizaines de milliers de
+// caracteres.
+app.use(express.json({ limit: "16kb" }));
 
 // Rate limiting — disabled in tests to avoid flakiness when running many requests in sequence.
 const RATE_LIMIT_DISABLED = process.env.NODE_ENV === "test" || process.env.DISABLE_RATE_LIMIT === "true";
@@ -224,7 +238,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateJoinRoomPayload));
 
   socket.on("update-selection", safeHandler<UpdateSelectionPayload>("update-selection", (payload) => {
     const { roomId, memberId, memberToken, championId, championAlias, skinId, chromaId } = payload;
@@ -259,7 +273,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateUpdateSelectionPayload));
 
   socket.on("owned-options", safeHandler<OwnedOptionsPayload>("owned-options", (payload) => {
     const { roomId, memberId, memberToken, championId, championAlias, options } = payload;
@@ -276,20 +290,13 @@ io.on("connection", (socket) => {
 
     assertMemberAuth(member, memberToken, "owned-options");
 
+    // `options` est deja valide element par element par
+    // validateOwnedOptionsPayload (type, bornes, et cap a MAX_OPTIONS) : ce qui
+    // arrive ici ne peut plus faire lever recomputeSynergy.
     member.championId = championId;
     member.championAlias = championAlias ?? "";
-    member.options = Array.isArray(options) ? options : [];
+    member.options = options;
     member.isReady = true;
-
-    // Security check
-    if (member.options && member.options.length > 2000) {
-      logger.warn(`[owned-options] Member ${memberId} sent too many options (${member.options.length}). Truncating.`, {
-        roomId,
-        memberId,
-        optionsCount: member.options.length,
-      });
-      member.options = member.options.slice(0, 2000);
-    }
 
     logger.debug(`[owned-options] member=${memberId} room=${roomId} options=${member.options.length}`);
 
@@ -318,7 +325,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateOwnedOptionsPayload));
 
   socket.on("leave-room", safeHandler<LeaveRoomPayload>("leave-room", ({ roomId, memberId, memberToken }) => {
     const room = roomService.getRoom(roomId);
@@ -337,37 +344,67 @@ io.on("connection", (socket) => {
 
     socketToMember.delete(socket.id);
     socket.leave(roomId);
-  }));
+  }, validateLeaveRoomPayload));
 
+  // `disconnect` ne peut pas passer par safeHandler (aucun payload, et il est
+  // emis par Socket.IO lui-meme), mais il DOIT etre protege : il appelle
+  // handleMemberLeave -> removeMember -> recomputeSynergy. Une exception qui
+  // s'en echappe remonte a l'event loop et, sans handler uncaughtException,
+  // tue le process — emportant l'integralite de l'etat en memoire.
+  //
+  // Le nettoyage presence est isole du nettoyage room dans un second try :
+  // l'echec de l'un ne doit pas laisser l'autre a moitie fait (fuite d'entree
+  // dans presenceManager).
   socket.on("disconnect", () => {
-    // Handle room membership cleanup
     const info = socketToMember.get(socket.id);
     socketToMember.delete(socket.id);
     removeClientVersion(socket.id);
 
-    if (info) {
-      logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
-      handleMemberLeave(info.roomId, info.memberId, "disconnect");
+    try {
+      if (info) {
+        logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
+        handleMemberLeave(info.roomId, info.memberId, "disconnect");
+      }
+    } catch (err) {
+      logger.error(`[disconnect] Room cleanup failed for socket ${socket.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        roomId: info?.roomId,
+      });
     }
 
     // Handle presence cleanup and friend notifications (Story 4.3)
-    const puuid = presenceManager.getPuuidBySocketId(socket.id);
-    if (puuid) {
-      const friends = presenceManager.getFriends(puuid);
-      const summonerName = presenceManager.getSummonerName(puuid);
+    try {
+      const puuid = presenceManager.getPuuidBySocketId(socket.id);
+      if (puuid) {
+        const friends = presenceManager.getFriends(puuid);
+        const summonerName = presenceManager.getSummonerName(puuid);
 
-      // Notify online friends that this user is offline
-      if (friends) {
-        for (const friendPuuid of friends) {
-          if (presenceManager.isOnline(friendPuuid)) {
-            io.to(`user:${friendPuuid}`).emit("friend-offline", { puuid });
+        // Notify online friends that this user is offline
+        if (friends) {
+          for (const friendPuuid of friends) {
+            if (presenceManager.isOnline(friendPuuid)) {
+              io.to(`user:${friendPuuid}`).emit("friend-offline", { puuid });
+            }
           }
         }
-      }
 
-      // Clear presence after notifications
-      presenceManager.disconnect(socket.id);
-      logger.info(`[identify] ${summonerName} (${puuid}) disconnected`);
+        // Clear presence after notifications
+        presenceManager.disconnect(socket.id);
+        logger.info(`[identify] ${summonerName} (${puuid}) disconnected`);
+      }
+    } catch (err) {
+      logger.error(`[disconnect] Presence cleanup failed for socket ${socket.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      // Filet de securite : purger quand meme l'entree, sinon le PUUID reste
+      // "en ligne" pour toujours et son proprietaire ne peut plus s'identifier.
+      try {
+        presenceManager.disconnect(socket.id);
+      } catch {
+        /* rien de plus a tenter */
+      }
     }
   });
 
@@ -412,7 +449,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateRequestGroupRerollPayload));
 
   socket.on("suggest-color", (payload: SuggestColorPayload, ack?: (response: { success: boolean; error?: string }) => void) => {
     try {
@@ -550,7 +587,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateApplySkinLineSynergyPayload));
 
   // --- Kick Member (owner only) ---
   socket.on("kick-member", safeHandler<KickMemberPayload>("kick-member", (payload) => {
@@ -576,10 +613,8 @@ io.on("connection", (socket) => {
       });
     }
 
-    if (typeof targetMemberId !== "string" || targetMemberId.length === 0) {
-      throw new AppError(ErrorCodes.INVALID_PAYLOAD, `Invalid targetMemberId`, true, { targetMemberId });
-    }
-
+    // `targetMemberId` est deja garanti non vide et borne par
+    // validateKickMemberPayload.
     const target = room.members.get(targetMemberId);
     const result = roomService.kickMember(room, targetMemberId);
     if (!result.ok) {
@@ -614,7 +649,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateKickMemberPayload));
 
   // --- Per-match Skin Lock ---
   socket.on("set-skin-lock", safeHandler<SetSkinLockPayload>("set-skin-lock", (payload) => {
@@ -641,7 +676,7 @@ io.on("connection", (socket) => {
     emitVersionedToRoom(io, roomId, "room-state", (version) =>
       createRoomStatePayload(serializedRoom, version)
     );
-  }));
+  }, validateSetSkinLockPayload));
 
   // --- Identity Handshake (Story 4.3) ---
   socket.on("identify", (payload: IdentifyPayload) => {
@@ -785,6 +820,33 @@ io.on("connection", (socket) => {
     }
   });
 });
+
+// --- Filet de securite process ---
+// L'etat des rooms est 100% en memoire : un crash du process detruit les rooms
+// de TOUS les utilisateurs connectes. Une exception isolee echappee d'un
+// callback (timer, I/O, listener Socket.IO) ne doit donc jamais suffire a tuer
+// le serveur. On logge et on continue.
+//
+// Volontairement PAS de process.exit() : un redemarrage laisserait les clients
+// avec des rooms fantomes, et PM2 (ecosystem.config.js) n'a ni healthcheck ni
+// max_memory_restart pour arbitrer. Si l'etat devient reellement incoherent,
+// c'est la supervision qui doit trancher, pas un handler generique.
+// Ces handlers ne sont pas installes en test : Jest doit voir les erreurs.
+if (process.env.NODE_ENV !== "test") {
+  process.on("uncaughtException", (err) => {
+    logger.error("[fatal] uncaughtException — le process continue", {
+      error: err?.message,
+      stack: err?.stack,
+    });
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logger.error("[fatal] unhandledRejection — le process continue", {
+      reason: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+    });
+  });
+}
 
 // --- Start ---
 // Only start the server if this module is run directly (not imported for tests)

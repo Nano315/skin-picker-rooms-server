@@ -1,8 +1,17 @@
 import { randomUUID, randomInt, randomBytes, timingSafeEqual } from "crypto";
 import { Room, Member, ColorSynergy, SkinLineSynergy, ChromaCombination, SkinLineCombination, GroupSkinOption } from "../types";
 import { logger } from "../utils/logger";
+import { AppError, ErrorCodes } from "../utils/errors";
 
 const GROUP_HISTORY_LIMIT = 3;
+
+/**
+ * Liste blanche des caracteres acceptes dans un prefixe de nom de bot.
+ * Constantes (jamais construites depuis une entree utilisateur) et lineaires :
+ * quantificateur borne sur une classe simple, aucun backtracking possible.
+ */
+const BOT_NAME_PREFIX_RE = /^[A-Za-z0-9 _-]{1,24}$/;
+const BOT_NAME_SUFFIX_RE = /^\d{1,4}$/;
 
 function generateMemberToken(): string {
   return randomBytes(32).toString("hex");
@@ -694,18 +703,38 @@ export class RoomService {
     const toAdd = Math.min(count, freeSlots);
     const createdBots: Member[] = [];
 
-    const namePrefix = config.namePrefix || "Bot";
+    // `config` vient directement du body HTTP. `namePrefix` alimentait
+    // auparavant un `new RegExp(...)` : l'echappement cense neutraliser les
+    // metacaracteres etait casse (la classe se fermait sur `\\`, si bien que le
+    // .replace() ne remplacait jamais rien), et un prefixe comme "(a+)+"
+    // compilait en `^(a+)+ (\d+)$` — backtracking catastrophique contre des
+    // noms de membres eux-memes non bornes, donc gel de l'event loop.
+    //
+    // On n'utilise plus de RegExp du tout : validation par liste blanche de
+    // caracteres, puis comparaison par prefixe.
+    const rawPrefix =
+      typeof config?.namePrefix === "string" ? config.namePrefix : "Bot";
+    if (!BOT_NAME_PREFIX_RE.test(rawPrefix)) {
+      throw new AppError(
+        ErrorCodes.INVALID_PAYLOAD,
+        "Invalid namePrefix: expected 1-24 alphanumeric characters, space, hyphen or underscore",
+        true,
+        { namePrefix: rawPrefix.slice(0, 32) }
+      );
+    }
+    const namePrefix = rawPrefix;
 
     // Pick a starting index that avoids collision with any existing
     // "<prefix> <n>" member name (including bots from prior addBots calls
     // that may have been filled and partially vacated).
     const takenSuffixes = new Set<number>();
-    const prefixMatch = new RegExp(
-      `^${namePrefix.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")} (\\d+)$`
-    );
     for (const m of room.members.values()) {
-      const match = prefixMatch.exec(m.name);
-      if (match) takenSuffixes.add(parseInt(match[1], 10));
+      if (!m.name.startsWith(`${namePrefix} `)) continue;
+      const suffix = m.name.slice(namePrefix.length + 1);
+      // 1 a 4 chiffres : borne l'entier et evite tout parcours couteux.
+      if (BOT_NAME_SUFFIX_RE.test(suffix)) {
+        takenSuffixes.add(parseInt(suffix, 10));
+      }
     }
 
     let nextSuffix = 1;
