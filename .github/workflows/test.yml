@@ -22,4 +22,9 @@ jobs:
           # declarent `engines.node: 20 || >=22`.
           node-version: '22'
       - run: npm ci
+
+      # Typecheck sur PR : le deploiement lance `npm run build` (tsc), donc une
+      # erreur de types ne se revelait qu'au moment de deployer.
+      - run: npx tsc --noEmit
+
       - run: npm test -- --coverage
