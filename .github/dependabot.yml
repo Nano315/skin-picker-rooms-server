@@ -1,5 +1,11 @@
-# Mises a jour mineures et correctives groupees en une PR hebdomadaire ; les
-# majeures arrivent separement pour etre relues une par une.
+# Cf. le commentaire detaille dans le dependabot.yml du repo front.
+#
+# Les majeures ne sont pas proposees automatiquement : le premier lot a ouvert
+# une PR typescript 5->7 impossible a merger (ts-jest exige `>=4.3 <6`), qui ne
+# serait jamais passee au vert. Une majeure se decide et se teste a la main.
+#
+# La securite ne repose donc plus sur les majeures automatiques : le workflow de
+# test lance `npm audit` a chaque PR pour que les alertes restent visibles.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -12,6 +18,9 @@ updates:
       minor-et-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore(deps)"
 
@@ -19,5 +28,8 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
     commit-message:
       prefix: "chore(ci)"

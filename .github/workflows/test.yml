@@ -1,7 +1,12 @@
 # .github/workflows/test.yml
 name: Tests
 
-on: [push, pull_request]
+# Push ecoute uniquement sur main : sinon chaque PR declenche deux runs
+# identiques (un pour le push de la branche, un pour la PR).
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 # Declenche depuis des forks sur `pull_request` : le job execute `npm ci`
 # (scripts d'installation tiers) et les tests du contributeur. Lecture seule.
@@ -28,3 +33,8 @@ jobs:
       - run: npx tsc --noEmit
 
       - run: npm test -- --coverage
+
+      # Non bloquant : dependabot n'ouvre plus les majeures automatiquement,
+      # c'est donc ici que restent visibles les vulnerabilites qui en exigent une.
+      - name: Audit (informatif)
+        run: npm audit --audit-level=high || true
