@@ -165,6 +165,17 @@ export type Room = {
    */
   pendingMembers: Map<string, number>;
   /**
+   * Membres dont le socket est tombe alors qu'ils etaient connectes
+   * (memberId -> horodatage de la deconnexion). Ils restent membres de la room
+   * pendant le sursis, ce qui permet a une reconnexion de les retrouver ; le
+   * balayage les retire quand le sursis expire.
+   *
+   * Meme raison que `pendingMembers` d'etre porte par Room et non par Member :
+   * `serializeRoom` diffuse tout champ ajoute a Member, ce qui changerait le
+   * format de fil de `room-state`.
+   */
+  disconnectedMembers: Map<string, number>;
+  /**
    * Noms exclus par le proprietaire (normalises en minuscules).
    *
    * Il n'y a pas d'identite forte cote serveur : le memberId est regenere a

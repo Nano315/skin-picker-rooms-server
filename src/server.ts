@@ -212,6 +212,28 @@ function evictMemberSockets(roomId: string, memberId: string): void {
   })();
 }
 
+/**
+ * Chute de socket d'un membre connecte : on ouvre le sursis de reconnexion au
+ * lieu de le retirer.
+ *
+ * Rien n'est diffuse aux autres membres : pour eux, la room ne change pas. Si
+ * le membre revient dans le sursis, personne n'aura rien vu ; s'il ne revient
+ * pas, `sweep` le retire et diffusera l'etat a ce moment-la.
+ *
+ * Le socket a deja ete retire de `socketToMember` par l'appelant, donc plus
+ * aucun evenement ne peut arriver en son nom.
+ */
+function handleMemberDisconnect(roomId: string, memberId: string) {
+  const room = roomService.getRoom(roomId);
+  if (!room) return;
+
+  if (!roomService.markMemberDisconnected(room, memberId)) return;
+
+  logger.debug(
+    `[socket] Membre ${memberId} de la room ${room.code} en sursis de reconnexion`
+  );
+}
+
 function handleMemberLeave(roomId: string, memberId: string, reason: string) {
   const room = roomService.getRoom(roomId);
   if (!room) return;
@@ -400,7 +422,10 @@ io.on("connection", (socket) => {
     try {
       if (info) {
         logger.debug(`[socket] ${socket.id} disconnected (room ${info.roomId})`);
-        handleMemberLeave(info.roomId, info.memberId, "disconnect");
+        // Une chute de socket n'est PAS un depart : elle ouvre un sursis de
+        // reconnexion. Seul `leave-room` (action deliberee) retire tout de
+        // suite. Voir DISCONNECT_GRACE_MS dans room.service.
+        handleMemberDisconnect(info.roomId, info.memberId);
       }
     } catch (err) {
       logger.error(`[disconnect] Room cleanup failed for socket ${socket.id}`, {
@@ -889,7 +914,25 @@ io.on("connection", (socket) => {
 if (process.env.NODE_ENV !== "test") {
   const sweepTimer = setInterval(() => {
     try {
-      const { membersEvicted, roomsClosed } = roomService.sweep();
+      const { membersEvicted, roomsClosed, changedRoomIds, closedRoomIds } =
+        roomService.sweep();
+
+      // Le balayage modifie l'etat sans qu'aucun client n'ait agi : c'est donc
+      // ici, et nulle part ailleurs, que les autres membres apprennent qu'un
+      // coequipier n'est pas revenu de sa coupure reseau.
+      for (const roomId of changedRoomIds) {
+        const room = roomService.getRoom(roomId);
+        if (!room) continue;
+        const serializedRoom = roomService.serializeRoom(room);
+        emitVersionedToRoom(io, roomId, "room-state", (version) =>
+          createRoomStatePayload(serializedRoom, version)
+        );
+      }
+      for (const roomId of closedRoomIds) {
+        io.to(roomId).emit("room-closed", { reason: "inactive" });
+        io.in(roomId).disconnectSockets(true);
+      }
+
       if (membersEvicted > 0 || roomsClosed > 0) {
         logger.info(
           `[sweep] ${membersEvicted} membre(s) evince(s), ${roomsClosed} room(s) fermee(s) — ${roomService.rooms.size} restantes`
@@ -932,9 +975,52 @@ if (process.env.NODE_ENV !== "test") {
   });
 }
 
+// --- Arret propre ---
+// L'etat etant entierement en memoire, un `docker compose up -d --build` ou un
+// `pm2 restart` detruit toutes les rooms en cours. Sans ce handler, les clients
+// ne recevaient RIEN : leur socket tombait, ils tentaient de se reconnecter, et
+// se retrouvaient face a un MEMBER_NOT_FOUND une fois le serveur revenu — un
+// etat que le front n'a aucun moyen de distinguer d'un bug.
+//
+// On leur dit donc explicitement pourquoi, avant de fermer. `server-restart` est
+// une raison distincte : le client peut la traiter comme temporaire et proposer
+// de recreer la room, la ou `owner-left` est definitif.
+function shutdown(signal: string): void {
+  logger.info(`[shutdown] ${signal} recu — fermeture des rooms en cours`);
+  try {
+    io.emit("room-closed", { reason: "server-restart" });
+  } catch (err) {
+    logger.error("[shutdown] Diffusion room-closed en echec", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Laisse le temps au message de partir avant de couper les sockets : sans ce
+  // delai, io.close() ferme les connexions avant que l'emit soit ecrit sur le
+  // reseau, et le message est perdu — ce qui annule tout l'interet du handler.
+  setTimeout(() => {
+    io.close(() => {
+      httpServer.close(() => {
+        logger.info("[shutdown] Termine");
+        process.exit(0);
+      });
+    });
+  }, 300).unref();
+
+  // Garde-fou : si une socket refuse de se fermer, on sort quand meme avant que
+  // l'orchestrateur n'envoie un SIGKILL.
+  setTimeout(() => {
+    logger.warn("[shutdown] Delai depasse — sortie forcee");
+    process.exit(0);
+  }, 5000).unref();
+}
+
 // --- Start ---
 // Only start the server if this module is run directly (not imported for tests)
 if (process.env.NODE_ENV !== "test") {
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   const PORT = Number(process.env.PORT) || 4000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     logger.info(`Rooms server listening on port ${PORT}`);

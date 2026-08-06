@@ -35,6 +35,23 @@ const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
  */
 const PENDING_MEMBER_TTL_MS = 2 * 60 * 1000;
 
+/**
+ * Sursis laisse a un membre DEJA connecte dont le socket tombe, avant de le
+ * retirer de la room.
+ *
+ * Sans lui, une coupure reseau d'une seconde en plein champion select suffisait
+ * a le sortir de la room : la propriete etait transferee ou la room fermee, le
+ * client se reconnectait aussitot, recevait MEMBER_NOT_FOUND, et le front
+ * traitait cette erreur comme fatale. Le paradoxe etait complet — un membre qui
+ * ne s'etait JAMAIS connecte beneficiait de 2 minutes de sursis
+ * (`pendingMembers`), celui qui jouait depuis 20 minutes n'en avait aucune.
+ *
+ * 90 s couvre largement une reconnexion Wi-Fi ou un changement de reseau, tout
+ * en restant sous les 2 min de `PENDING_MEMBER_TTL_MS` : un depart reel se voit
+ * donc toujours en moins d'un cycle de champion select.
+ */
+const DISCONNECT_GRACE_MS = 90 * 1000;
+
 /** Periode de balayage, pilotee par server.ts. */
 export const ROOM_SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -148,6 +165,7 @@ export class RoomService {
       // Le proprietaire aussi doit attacher un socket : une room creee en REST
       // et jamais rejointe ne doit pas survivre au balayage.
       pendingMembers: new Map([[ownerId, now]]),
+      disconnectedMembers: new Map(),
       bannedNames: new Set(),
     };
 
@@ -229,7 +247,23 @@ export class RoomService {
    */
   public markMemberConnected(room: Room, memberId: string): void {
     room.pendingMembers.delete(memberId);
+    // Une reconnexion annule le sursis : c'est ce qui rend la coupure reseau
+    // transparente pour le membre comme pour ses coequipiers.
+    room.disconnectedMembers.delete(memberId);
     room.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Ouvre le sursis de reconnexion pour un membre dont le socket vient de
+   * tomber. Le membre reste dans la room ; c'est `sweep` qui le retirera si le
+   * sursis expire sans reconnexion.
+   *
+   * @returns false si le membre n'existe pas (rien a temporiser)
+   */
+  public markMemberDisconnected(room: Room, memberId: string): boolean {
+    if (!room.members.has(memberId)) return false;
+    room.disconnectedMembers.set(memberId, Date.now());
+    return true;
   }
 
   /** Reinitialise le TTL de la room sur une action significative. */
@@ -242,12 +276,25 @@ export class RoomService {
    * rooms abandonnees. Exporte pour pouvoir etre declenche deterministiquement
    * dans les tests, sans dependre du timer.
    *
+   * Ne touche a aucun socket : le service ignore tout de Socket.IO. Les rooms
+   * affectees sont remontees a l'appelant, a qui il revient de diffuser
+   * `room-state` (rooms modifiees) et `room-closed` (rooms fermees). Sans ca,
+   * les clients restants gardaient une liste de membres perimee jusqu'a la
+   * prochaine action de quelqu'un d'autre.
+   *
    * @param now horodatage injectable (tests)
-   * @returns compteurs pour les logs/metrics
+   * @returns compteurs pour les logs, et les rooms a notifier
    */
-  public sweep(now = Date.now()): { membersEvicted: number; roomsClosed: number } {
+  public sweep(now = Date.now()): {
+    membersEvicted: number;
+    roomsClosed: number;
+    changedRoomIds: string[];
+    closedRoomIds: string[];
+  } {
     let membersEvicted = 0;
     let roomsClosed = 0;
+    const changedRoomIds: string[] = [];
+    const closedRoomIds: string[] = [];
 
     for (const room of Array.from(this.rooms.values())) {
       let evictedHere = 0;
@@ -265,14 +312,35 @@ export class RoomService {
         }
       }
 
+      // 1 bis. Membres deconnectes dont le sursis a expire. Un membre qui s'est
+      //        reconnecte entre-temps a deja ete retire de la map par
+      //        `markMemberConnected` : il n'est donc jamais evince ici.
+      for (const [memberId, since] of Array.from(
+        room.disconnectedMembers.entries()
+      )) {
+        if (now - since < DISCONNECT_GRACE_MS) continue;
+        room.disconnectedMembers.delete(memberId);
+        if (room.members.delete(memberId)) {
+          evictedHere++;
+          membersEvicted++;
+          logger.info(
+            `[sweep] Room ${room.code}: membre ${memberId} non reconnecte apres ${Math.round(DISCONNECT_GRACE_MS / 1000)}s, retire`
+          );
+        }
+      }
+
       // 2. Room vide (plus aucun membre apres eviction) ou inactive depuis trop
       //    longtemps.
       const expired = now - room.lastActivityAt >= ROOM_TTL_MS;
       if (room.members.size === 0 || expired) {
+        const wasEmpty = room.members.size === 0;
+        const roomId = room.id;
         this.closeRoom(room);
         roomsClosed++;
+        // Une room vide n'a personne a prevenir ; une room expiree, si.
+        if (!wasEmpty) closedRoomIds.push(roomId);
         logger.info(
-          `[sweep] Room ${room.code} supprimee (${room.members.size === 0 ? "vide" : "inactive"})`
+          `[sweep] Room ${room.code} supprimee (${wasEmpty ? "vide" : "inactive"})`
         );
         continue;
       }
@@ -287,10 +355,13 @@ export class RoomService {
         logger.info(`[sweep] Room ${room.code}: nouveau proprietaire ${next.name}`);
       }
 
-      if (evictedHere > 0) this.recomputeSynergy(room);
+      if (evictedHere > 0) {
+        this.recomputeSynergy(room);
+        changedRoomIds.push(room.id);
+      }
     }
 
-    return { membersEvicted, roomsClosed };
+    return { membersEvicted, roomsClosed, changedRoomIds, closedRoomIds };
   }
 
   /**
@@ -315,6 +386,9 @@ export class RoomService {
 
     const wasOwner = memberId === room.ownerId;
     room.members.delete(memberId);
+    // Depart definitif : plus rien a temporiser pour ce membre.
+    room.disconnectedMembers.delete(memberId);
+    room.pendingMembers.delete(memberId);
 
     if (room.members.size === 0) {
       this.closeRoom(room);
