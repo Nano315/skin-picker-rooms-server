@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io";
 import { logger } from "../utils/logger";
+import { redactPuuid } from "../utils/redact";
 
 /**
  * Information stored for each connected user
@@ -42,7 +43,7 @@ class PresenceManager {
       // la map. Donc arriver ici = soit double identify du meme client (bug),
       // soit une autre machine tente d'usurper le PUUID.
       logger.warn(
-        `[presence] Rejected identify from socket ${socket.id}: PUUID ${puuid} already claimed by socket ${existingInfo.socketId}`
+        `[presence] Rejected identify from socket ${socket.id}: PUUID ${redactPuuid(puuid)} already claimed by socket ${existingInfo.socketId}`
       );
       return { ok: false, reason: "puuid_taken" };
     }
@@ -63,7 +64,7 @@ class PresenceManager {
       this.friendsMap.delete(previousPuuid);
       socket.leave(`user:${previousPuuid}`);
       logger.info(
-        `[presence] Socket ${socket.id} re-identified: released previous PUUID ${previousPuuid}`
+        `[presence] Socket ${socket.id} re-identified: released previous PUUID ${redactPuuid(previousPuuid)}`
       );
     }
 
@@ -77,7 +78,7 @@ class PresenceManager {
     // Join the user's personal room for targeted messaging
     socket.join(`user:${puuid}`);
 
-    logger.info(`[presence] ${summonerName} (${puuid}) identified`);
+    logger.info(`[presence] ${summonerName} (${redactPuuid(puuid)}) identified`);
     return { ok: true };
   }
 
@@ -96,7 +97,7 @@ class PresenceManager {
     this.socketToPuuid.delete(socketId);
     this.friendsMap.delete(puuid);
 
-    logger.info(`[presence] ${puuid} disconnected`);
+    logger.info(`[presence] ${redactPuuid(puuid)} disconnected`);
     return puuid;
   }
 

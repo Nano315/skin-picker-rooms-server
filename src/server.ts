@@ -18,6 +18,7 @@ import {
 } from "./utils/validation";
 import { createSocketRateLimiter } from "./utils/socketRateLimiter";
 import { AppError, ErrorCodes } from "./utils/errors";
+import { redactPuuid } from "./utils/redact";
 import {
   registerClientVersion,
   getClientVersion,
@@ -427,7 +428,7 @@ io.on("connection", (socket) => {
 
         // Clear presence after notifications
         presenceManager.disconnect(socket.id);
-        logger.info(`[identify] ${summonerName} (${puuid}) disconnected`);
+        logger.info(`[identify] ${summonerName} (${redactPuuid(puuid)}) disconnected`);
       }
     } catch (err) {
       logger.error(`[disconnect] Presence cleanup failed for socket ${socket.id}`, {
@@ -777,7 +778,7 @@ io.on("connection", (socket) => {
         }
       }
 
-      logger.info(`[identify] ${summonerName} (${puuid}) identified with ${validFriends.length} friends, ${onlineFriends.length} online`);
+      logger.info(`[identify] ${summonerName} (${redactPuuid(puuid)}) identified with ${validFriends.length} friends, ${onlineFriends.length} online`);
     } catch (err) {
       logger.error("[identify] Error processing identify", err);
     }
